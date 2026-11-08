@@ -1,5 +1,6 @@
 package com.nova.keyboard
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -30,12 +31,13 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.chrono.HijrahDate
 import java.time.temporal.ChronoField
+import java.security.SecureRandom
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 
 class KeyboardService : InputMethodService() {
-    private enum class Mode { AR, EN, SYM, SYM2, EMO, CLIP, TOOLS, STYLE, DATE, SNIP }
+    private enum class Mode { AR, EN, SYM, SYM2, EMO, CLIP, TOOLS, STYLE, DATE, SNIP, PHR, KAO }
     private class Th(val bg: Int, val key: Int, val sp: Int, val fg: Int, val acc: Int, val accFg: Int)
 
     private fun col(x: Long) = x.toInt()
@@ -78,8 +80,12 @@ class KeyboardService : InputMethodService() {
 
     private val ar = listOf(
         "ض ص ث ق ف غ ع ه خ ح ج د".split(" "),
-        "ش س ي ب ل ا ت ن م ك ط ذ".split(" "),
-        "ئ ء ؤ ر ى ة و ز ظ".split(" "))
+        "ش س ي ب ل ا ت ن م ك ط".split(" "),
+        "ذ ئ ء ؤ ر ى ة و ز ظ".split(" "))
+    private val arAlpha = listOf(
+        "ا ب ت ث ج ح خ د ذ ر ز".split(" "),
+        "س ش ص ض ط ظ ع غ ف ق ك".split(" "),
+        "ل م ن ه و ي ة ى ء".split(" "))
     private val arShift = listOf(
         "َ ُ ِ ً ٌ ٍ ّ ْ ـ ، ؛ ؟".split(" "),
         "إ أ آ ٰ « » ڤ پ چ گ ژ ٱ".split(" "),
@@ -99,7 +105,7 @@ class KeyboardService : InputMethodService() {
 
     private val altMap: Map<String, List<String>> = mapOf(
         "ا" to listOf("أ", "إ", "آ", "ٱ"), "ي" to listOf("ى", "ئ"), "ه" to listOf("ة"),
-        "و" to listOf("ؤ"), "ل" to listOf("لا", "لأ", "لإ", "لآ"), "ك" to listOf("گ"),
+        "و" to listOf("ؤ", "ء"), "ل" to listOf("لا", "لأ", "لإ", "لآ"), "ك" to listOf("گ"),
         "ب" to listOf("پ"), "ج" to listOf("چ"), "ف" to listOf("ڤ"), "ط" to listOf("ظ"),
         "a" to listOf("à", "á", "â", "ä", "æ", "ã", "å", "ā"), "e" to listOf("è", "é", "ê", "ë", "ē"),
         "i" to listOf("ì", "í", "î", "ï"), "o" to listOf("ò", "ó", "ô", "ö", "œ"),
@@ -189,6 +195,7 @@ class KeyboardService : InputMethodService() {
     // ---------- rendering ----------
     private fun render() {
         dismissPopup()
+        dismissPreview()
         val t = th
         val h = keyH()
         curH = h
@@ -209,6 +216,8 @@ class KeyboardService : InputMethodService() {
                 Tools.styles.map { (label, f) -> label to { applyStyle(f) } })
             Mode.DATE -> choicePanel(h, "📅 التاريخ والوقت", dateItems().map { s -> s to { insertText(s) } })
             Mode.SNIP -> snipPanel(h)
+            Mode.PHR -> choicePanel(h, "🕌 عبارات ورموز", phraseItems().map { (l, x) -> l to { insertText(x) } })
+            Mode.KAO -> choicePanel(h, "😜 كاموجي", kaoItems().map { x -> x to { insertText(x) } })
             else -> keysPanel(h)
         }
     }
@@ -234,30 +243,34 @@ class KeyboardService : InputMethodService() {
     private fun keysPanel(h: Int) {
         if (prefs.getBoolean("numrow", true)) {
             root.addView(row(h, "1234567890".map { d ->
-                key("$d", 1f, alts = listOf("٠١٢٣٤٥٦٧٨٩"[d - '0'].toString())) { commit("$d"); afterText() }
+                key("$d", 1f, alts = listOf("٠١٢٣٤٥٦٧٨٩"[d - '0'].toString(), ")!@#\$%^&*("[d - '0'].toString())) { commit("$d"); afterText() }
             }))
         }
+        val layout = prefs.getInt("arlayout", 0)
+        val stdAr = mode == Mode.AR && shift == 0 && layout == 0
         val rows = when (mode) {
-            Mode.AR -> if (shift != 0) arShift else ar
+            Mode.AR -> if (shift != 0) arShift else if (layout == 1) arAlpha else ar
             Mode.EN -> en
             Mode.SYM -> sym
             else -> sym2
         }
         root.addView(row(h, rows[0].map { letterKey(it) }))
+        val stagger = mode == Mode.EN || stdAr
         val r2 = mutableListOf<View>()
-        if (mode == Mode.EN) r2.add(spacer(0.5f))
+        if (stagger) r2.add(spacer(0.5f))
         rows[1].forEach { r2.add(letterKey(it)) }
-        if (mode == Mode.EN) r2.add(spacer(0.5f))
+        if (stagger) r2.add(spacer(0.5f))
         root.addView(row(h, r2))
+        val sw = if (stdAr) 1.2f else 1.5f
         val r3 = mutableListOf<View>()
         when (mode) {
-            Mode.AR -> r3.add(key("◌َ", 1.5f, if (shift != 0) 2 else 1) { onShift() })
-            Mode.EN -> r3.add(key(if (shift == 0) "⇧" else if (shift == 1) "⬆" else "⇪", 1.5f, if (shift != 0) 2 else 1) { onShift() })
-            Mode.SYM -> r3.add(key("=\\<", 1.5f, 1) { mode = Mode.SYM2; render() })
-            else -> r3.add(key("123", 1.5f, 1) { mode = Mode.SYM; render() })
+            Mode.AR -> r3.add(key("◌َ", sw, if (shift != 0) 2 else 1) { onShift() })
+            Mode.EN -> r3.add(key(if (shift == 0) "⇧" else if (shift == 1) "⬆" else "⇪", sw, if (shift != 0) 2 else 1) { onShift() })
+            Mode.SYM -> r3.add(key("=\\<", sw, 1) { mode = Mode.SYM2; render() })
+            else -> r3.add(key("123", sw, 1) { mode = Mode.SYM; render() })
         }
         rows[2].forEach { r3.add(letterKey(it)) }
-        r3.add(key("⌫", 1.5f, 1, repeat = true) { backspace() })
+        r3.add(key("⌫", sw, 1, repeat = true, swipeDel = true) { backspace() })
         root.addView(row(h, r3))
         root.addView(bottomRow(h))
     }
@@ -276,7 +289,7 @@ class KeyboardService : InputMethodService() {
             key("😀", 1.2f, 1) { mode = Mode.EMO; render() },
             key(if (isAr) "،" else ",", 1f, 1,
                 alts = if (isAr) listOf(",", "؛", "؟") else listOf("،", "؛")) { commit(if (isAr) "،" else ","); afterText() },
-            key(if (isAr) "العربية" else "English", 4.2f, 0, onLong = { picker() }) { space() },
+            key(if (isAr) "العربية" else "English", 4.2f, 0, onLong = { picker() }, swipeCursor = true) { space() },
             key(".", 1f, 1, alts = listOf("?", "!", ":", ";", "'", "\"", "؟")) { commit("."); afterText() },
             key(enterLabel(), 1.9f, 2) { enter() }
         ))
@@ -319,7 +332,7 @@ class KeyboardService : InputMethodService() {
     private fun panelBottom(h: Int): View = row(h, listOf(
         key("ABC", 2f, 1) { mode = letterMode; render(); autoCap() },
         key(if (letterMode == Mode.AR) "العربية" else "English", 6f) { space() },
-        key("⌫", 2f, 1, repeat = true) { backspace() }
+        key("⌫", 2f, 1, repeat = true, swipeDel = true) { backspace() }
     ))
 
     private fun clipPanel(h: Int) {
@@ -388,8 +401,8 @@ class KeyboardService : InputMethodService() {
     private fun key(
         label: String, w: Float, style: Int = 0, repeat: Boolean = false,
         alts: List<String> = emptyList(), onLong: (() -> Unit)? = null,
-        onUp: Boolean = false, sz: Float = 0f, onAlt: ((String) -> Unit)? = null,
-        onTap: () -> Unit
+        onUp: Boolean = false, sz: Float = 0f, swipeDel: Boolean = false, swipeCursor: Boolean = false,
+        onAlt: ((String) -> Unit)? = null, onTap: () -> Unit
     ): View {
         val t = th
         val bgc = when (style) { 1 -> t.sp; 2 -> t.acc; else -> t.key }
@@ -407,34 +420,51 @@ class KeyboardService : InputMethodService() {
             setMargins(mx, dp(3), mx, dp(3))
         }
         val deferred = alts.isNotEmpty() || onLong != null || onUp
+        val showPrev = style == 0 && !onUp && !repeat && onLong == null && label.codePointCount(0, label.length) == 1
         var longFired = false
         var moved = false
         var downX = 0f
         var downY = 0f
+        var swipeN = 0
         val longRun = Runnable {
+            dismissPreview()
             if (alts.isNotEmpty()) { longFired = true; feedback(tv); showPopup(tv, alts) }
             else if (onLong != null) { longFired = true; feedback(tv); onLong() }
         }
         val rep = object : Runnable {
-            override fun run() { repCount++; onTap(); handler.postDelayed(this, 45) }
+            override fun run() { repCount++; onTap(); handler.postDelayed(this, if (repCount > 8) 38L else 55L) }
         }
         tv.setOnTouchListener { v, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    longFired = false; moved = false; downX = e.rawX; downY = e.rawY
+                    longFired = false; moved = false; swipeN = 0; downX = e.rawX; downY = e.rawY
                     v.alpha = 0.6f
                     if (!onUp) feedback(v)
-                    if (repeat) { repCount = 0; onTap(); handler.postDelayed(rep, 380) }
+                    if (showPrev) showPreview(v, label)
+                    if (repeat) { repCount = 0; onTap(); handler.postDelayed(rep, 330) }
                     else if (!deferred) onTap()
                     else if (!onUp) handler.postDelayed(longRun, 330)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (popup != null) updatePopupSel(e.rawX)
-                    else if (onUp && (abs(e.rawX - downX) > dp(8) || abs(e.rawY - downY) > dp(8))) moved = true
+                    else if (swipeDel) {
+                        val n = ((downX - e.rawX) / dp(34)).toInt()
+                        if (n > swipeN) { handler.removeCallbacks(rep); deleteWordBack(); swipeN = n; moved = true }
+                    } else if (swipeCursor) {
+                        val n = ((e.rawX - downX) / dp(16)).toInt()
+                        if (n != swipeN) {
+                            handler.removeCallbacks(longRun)
+                            val d = n - swipeN
+                            for (k in 0 until abs(d))
+                                sendDownUpKeyEvents(if (d > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT)
+                            swipeN = n; moved = true
+                        }
+                    } else if (onUp && (abs(e.rawX - downX) > dp(8) || abs(e.rawY - downY) > dp(8))) moved = true
                 }
                 MotionEvent.ACTION_UP -> {
                     v.alpha = 1f
                     handler.removeCallbacks(rep); handler.removeCallbacks(longRun)
+                    dismissPreview()
                     if (deferred && !repeat) {
                         if (longFired) {
                             if (alts.isNotEmpty()) {
@@ -452,7 +482,7 @@ class KeyboardService : InputMethodService() {
                 MotionEvent.ACTION_CANCEL -> {
                     v.alpha = 1f
                     handler.removeCallbacks(rep); handler.removeCallbacks(longRun)
-                    dismissPopup()
+                    dismissPreview(); dismissPopup()
                 }
             }
             true
@@ -550,18 +580,19 @@ class KeyboardService : InputMethodService() {
         if (ic.getCursorCapsMode(ty) != 0) { shift = 1; render() }
     }
 
+    private fun deleteWordBack(): Boolean {
+        val ic = currentInputConnection ?: return false
+        val b = ic.getTextBeforeCursor(60, 0)?.toString()
+        if (b.isNullOrEmpty()) return false
+        var i = b.length
+        while (i > 0 && b[i - 1].isWhitespace()) i--
+        while (i > 0 && !b[i - 1].isWhitespace()) i--
+        ic.deleteSurroundingText(b.length - i, 0)
+        return true
+    }
+
     private fun backspace() {
-        val ic = currentInputConnection ?: return
-        if (repCount > 12) {
-            val b = ic.getTextBeforeCursor(60, 0)?.toString()
-            if (!b.isNullOrEmpty()) {
-                var i = b.length
-                while (i > 0 && b[i - 1].isWhitespace()) i--
-                while (i > 0 && !b[i - 1].isWhitespace()) i--
-                ic.deleteSurroundingText(b.length - i, 0)
-                return
-            }
-        }
+        if (repCount > 18 && deleteWordBack()) return
         sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
         autoCap()
     }
@@ -786,25 +817,41 @@ class KeyboardService : InputMethodService() {
     private fun toolsPanel(h: Int) {
         root.addView(header(h, "⚡ أدوات نوفا", { mode = letterMode; render() }))
         val incog = prefs.getBoolean("incog", false)
-        val tiles = listOf<Pair<String, () -> Unit>>(
-            "🔄\nعكس اللغة" to { toolConvert() },
-            "🧮\nحاسبة" to { toolCalc() },
-            "🔢\nتفقيط" to { toolTafqeet() },
-            "✨\nزخرفة" to { mode = Mode.STYLE; render() },
-            "🧹\nتنظيف" to { toolClean() },
-            "🔤\nعربيزي" to { toolArabizi() },
-            "📅\nالتاريخ" to { mode = Mode.DATE; render() },
-            "🎤\nإملاء" to { done(); startVoice() },
-            "📝\nاختصاراتي" to { mode = Mode.SNIP; render() },
-            "↩\nتراجع" to { toolUndo() },
-            (if (incog) "🕶\nتخفّي ✓" else "🕶\nتخفّي") to { prefs.edit().putBoolean("incog", !incog).apply(); render() },
-            "📋\nالحافظة" to { mode = Mode.CLIP; render() }
+        val tiles = listOf<Triple<String, Boolean, () -> Unit>>(
+            Triple("🔄\nعكس اللغة", false) { toolConvert() },
+            Triple("🧮\nحاسبة", false) { toolCalc() },
+            Triple("🔢\nتفقيط", false) { toolTafqeet() },
+            Triple("✨\nزخرفة", false) { mode = Mode.STYLE; render() },
+            Triple("🧹\nتنظيف", false) { toolClean() },
+            Triple("🔤\nعربيزي", false) { toolArabizi() },
+            Triple("📅\nالتاريخ", false) { mode = Mode.DATE; render() },
+            Triple("🎤\nإملاء", false) { done(); startVoice() },
+            Triple("🕌\nعبارات ورموز", false) { mode = Mode.PHR; render() },
+            Triple("📝\nاختصاراتي", false) { mode = Mode.SNIP; render() },
+            Triple("📋\nالحافظة", false) { mode = Mode.CLIP; render() },
+            Triple("😜\nكاموجي", false) { mode = Mode.KAO; render() },
+            Triple("📑\nنسخ الكل", false) { toolCopyAll(false) },
+            Triple("✂\nقص الكل", false) { toolCopyAll(true) },
+            Triple("☑\nتحديد الكل", false) { currentInputConnection?.performContextMenuAction(android.R.id.selectAll); done() },
+            Triple("🗑\nمسح الكل", false) { toolClear() },
+            Triple("↩\nتراجع", false) { toolUndo() },
+            Triple("١٢٣\nأرقام ↔", false) { toolDigits() },
+            Triple("Aa\nحالة الأحرف", false) { toolCase() },
+            Triple("📊\nعدّاد", false) { toolCount() },
+            Triple("🔐\nكلمة سر", false) { toolPassword() },
+            Triple(if (incog) "🕶\nتخفّي ✓" else "🕶\nتخفّي", incog) { prefs.edit().putBoolean("incog", !incog).apply(); render() }
         )
-        tiles.chunked(4).forEachIndexed { ri, r ->
-            root.addView(row(h, r.mapIndexed { ci, p ->
-                key(p.first, 1f, if (ri * 4 + ci == 10 && incog) 2 else 1, sz = curH * 0.25f) { p.second() }
-            }))
+        val colv = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        tiles.chunked(4).forEach { r ->
+            val views = r.map { (label, acc, act) -> key(label, 1f, if (acc) 2 else 1, sz = curH * 0.25f) { act() } }.toMutableList()
+            for (i in r.size until 4) views.add(spacer(1f))
+            colv.addView(row(h, views))
         }
+        root.addView(ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, h * 3)
+            isVerticalScrollBarEnabled = false
+            addView(colv)
+        })
         root.addView(panelBottom(h))
     }
 
@@ -902,4 +949,133 @@ class KeyboardService : InputMethodService() {
         pendingVoice = null
         commit("$t ")
     }
+
+    // ---------- v4 extras ----------
+    private var prevPw: PopupWindow? = null
+    private var prevTv: TextView? = null
+
+    private fun showPreview(anchor: View, label: String) {
+        if (!prefs.getBoolean("preview", true)) return
+        try {
+            val t = th
+            val w = (anchor.width * 1.5f).toInt()
+            val hh = (anchor.height * 1.25f).toInt()
+            val loc = IntArray(2)
+            anchor.getLocationOnScreen(loc)
+            val x = (loc[0] + anchor.width / 2 - w / 2).coerceIn(0, maxOf(0, resources.displayMetrics.widthPixels - w))
+            val y = loc[1] - hh - dp(6)
+            val pw = prevPw
+            val tv = prevTv
+            if (pw != null && pw.isShowing && tv != null) {
+                tv.text = label
+                pw.update(x, y, w, hh)
+            } else {
+                val n = TextView(this)
+                n.gravity = Gravity.CENTER
+                n.text = label
+                n.setTextColor(t.fg)
+                n.setTextSize(TypedValue.COMPLEX_UNIT_PX, hh * 0.5f)
+                n.background = GradientDrawable().apply { cornerRadius = dp(10).toFloat(); setColor(t.sp); setStroke(dp(1), t.acc) }
+                val np = PopupWindow(n, w, hh)
+                np.isTouchable = false
+                np.isFocusable = false
+                np.isClippingEnabled = false
+                np.showAtLocation(root, Gravity.NO_GRAVITY, x, y)
+                prevPw = np; prevTv = n
+            }
+        } catch (e: Throwable) {}
+    }
+
+    private fun dismissPreview() {
+        try { prevPw?.dismiss() } catch (e: Throwable) {}
+        prevPw = null; prevTv = null
+    }
+
+    private fun toolCopyAll(cut: Boolean) {
+        val tg = getTg(null) ?: return toast("لا يوجد نص")
+        cm.setPrimaryClip(ClipData.newPlainText("nova", tg.text))
+        if (cut) { applyTg(tg, ""); toast("تم القص — ↩ للتراجع") } else toast("تم النسخ")
+    }
+
+    private fun toolClear() {
+        val tg = getTg(null) ?: return toast("لا يوجد نص")
+        applyTg(tg, "")
+        toast("تم المسح — اضغط ↩ للتراجع")
+    }
+
+    private fun toolDigits() {
+        val tg = getTg(null) ?: return toast("اكتب أرقاماً أو حدّدها")
+        val t = tg.text
+        val out = if (t.any { it in '0'..'9' })
+            t.map { if (it in '0'..'9') '٠' + (it - '0') else it }.joinToString("")
+        else
+            t.map { if (it in '٠'..'٩') '0' + (it - '٠') else it }.joinToString("")
+        applyTg(tg, out); done()
+    }
+
+    private fun toolCase() {
+        val tg = getTg(null) ?: return toast("اكتب نصاً أو حدّده")
+        val t = tg.text
+        val up = t.uppercase()
+        val lo = t.lowercase()
+        val ti = lo.split(" ").joinToString(" ") { w -> w.replaceFirstChar { c -> c.uppercase() } }
+        applyTg(tg, when { t == lo -> ti; t == ti -> up; t == up -> lo; else -> lo }); done()
+    }
+
+    private fun toolCount() {
+        val tg = getTg(null) ?: return toast("لا يوجد نص")
+        val t = tg.text
+        val words = t.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.size
+        toast("كلمات: $words  •  حروف: ${t.length}  •  بدون مسافات: ${t.count { !it.isWhitespace() }}")
+    }
+
+    private fun toolPassword() {
+        val sets = listOf("abcdefghijkmnopqrstuvwxyz", "ABCDEFGHJKLMNPQRSTUVWXYZ", "23456789", "!@#\$%^&*-_?")
+        val r = SecureRandom()
+        val all = sets.joinToString("")
+        val chars = mutableListOf<Char>()
+        sets.forEach { chars.add(it[r.nextInt(it.length)]) }
+        while (chars.size < 16) chars.add(all[r.nextInt(all.length)])
+        chars.shuffle(r)
+        val pw = chars.joinToString("")
+        commit(pw)
+        undoOrig = ""; undoNew = pw
+        toast("تم إدراج كلمة سر قوية")
+        done()
+    }
+
+    private fun phraseItems(): List<Pair<String, String>> = listOf(
+        "﷽  بسم الله الرحمن الرحيم" to "﷽",
+        "ﷺ  صلى الله عليه وسلم" to "ﷺ",
+        "ﷻ  جلّ جلاله" to "ﷻ",
+        "﴿ ﴾  قوسا الآيات" to "﴿ ﴾",
+        "السلام عليكم ورحمة الله وبركاته" to "السلام عليكم ورحمة الله وبركاته",
+        "وعليكم السلام ورحمة الله وبركاته" to "وعليكم السلام ورحمة الله وبركاته",
+        "جزاك الله خيراً" to "جزاك الله خيراً",
+        "بارك الله فيك" to "بارك الله فيك",
+        "ما شاء الله تبارك الله" to "ما شاء الله تبارك الله",
+        "إن شاء الله" to "إن شاء الله",
+        "الحمد لله" to "الحمد لله",
+        "سبحان الله وبحمده" to "سبحان الله وبحمده",
+        "لا حول ولا قوة إلا بالله" to "لا حول ولا قوة إلا بالله",
+        "أستغفر الله العظيم وأتوب إليه" to "أستغفر الله العظيم وأتوب إليه",
+        "صباح الخير" to "صباح الخير",
+        "مساء الخير" to "مساء الخير",
+        "تصبح على خير" to "تصبح على خير",
+        "كل عام وأنتم بخير" to "كل عام وأنتم بخير",
+        "عيد مبارك، تقبل الله منا ومنكم" to "عيد مبارك، تقبل الله منا ومنكم",
+        "رمضان كريم" to "رمضان كريم",
+        "مبروك! ألف مبروك 🎉" to "مبروك! ألف مبروك 🎉",
+        "شكراً جزيلاً" to "شكراً جزيلاً",
+        "عفواً" to "عفواً",
+        "أعتذر عن التأخير" to "أعتذر عن التأخير",
+        "أنا في الطريق" to "أنا في الطريق",
+        "دقيقة وأرجع لك" to "دقيقة وأرجع لك",
+        "في أمان الله" to "في أمان الله"
+    )
+
+    private fun kaoItems(): List<String> = listOf(
+        "¯\\_(ツ)_/¯", "(╯°□°)╯︵ ┻━┻", "┬─┬ノ( º _ ºノ)", "( ͡° ͜ʖ ͡°)", "(ಥ﹏ಥ)", "(づ｡◕‿‿◕｡)づ",
+        "ʕ•ᴥ•ʔ", "(≧◡≦)", "o(≧▽≦)o", "٩(◕‿◕)۶", "(｡•́︿•̀｡)", "♥‿♥", "ಠ_ಠ", "(ง'̀-'́)ง", "(⌐■_■)", "(¬_¬)", "(^_^)v"
+    )
 }

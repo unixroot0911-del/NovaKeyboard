@@ -3,6 +3,7 @@ package com.nova.keyboard
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
@@ -12,23 +13,39 @@ import android.widget.*
 class SettingsActivity : Activity() {
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        val bg = Color.parseColor("#121212")
+        window.decorView.setBackgroundColor(bg)
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
         val p = getSharedPreferences("nova", MODE_PRIVATE)
         val d = resources.displayMetrics.density
         val pad = (20 * d).toInt()
         val l = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bg)
             setPadding(pad, (36 * d).toInt(), pad, pad)
         }
         fun title(t: String) = TextView(this).apply {
-            text = t; textSize = 16f; setPadding(0, (16 * d).toInt(), 0, (4 * d).toInt())
+            text = t; textSize = 16f; setTextColor(Color.parseColor("#4C8DFF"))
+            setPadding(0, (18 * d).toInt(), 0, (4 * d).toInt())
         }.also { l.addView(it) }
         fun sw(t: String, k: String, def: Boolean) = Switch(this).apply {
-            text = t; isChecked = p.getBoolean(k, def)
+            text = t; isChecked = p.getBoolean(k, def); setTextColor(Color.WHITE)
             setPadding(0, (8 * d).toInt(), 0, (8 * d).toInt())
             setOnCheckedChangeListener { _, c -> p.edit().putBoolean(k, c).apply() }
         }.also { l.addView(it) }
+        fun spinner(items: List<String>, key: String) = Spinner(this).apply {
+            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item, items)
+            setSelection(p.getInt(key, 0))
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(a: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                    p.edit().putInt(key, pos).apply()
+                }
+                override fun onNothingSelected(a: AdapterView<*>?) {}
+            }
+        }.also { l.addView(it) }
 
-        l.addView(TextView(this).apply { text = "Nova Keyboard 3.0"; textSize = 24f })
+        l.addView(TextView(this).apply { text = "Nova Keyboard 4.0"; textSize = 26f; setTextColor(Color.WHITE) })
         l.addView(Button(this).apply {
             text = "1) تفعيل الكيبورد"
             setOnClickListener { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
@@ -37,9 +54,14 @@ class SettingsActivity : Activity() {
             text = "2) اختيار الكيبورد"
             setOnClickListener { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker() }
         })
-        l.addView(EditText(this).apply { hint = "جرّب الكتابة هنا" })
+        l.addView(EditText(this).apply {
+            hint = "جرّب الكتابة هنا"; setTextColor(Color.WHITE); setHintTextColor(Color.GRAY)
+        })
 
-        val hl = TextView(this)
+        title("ترتيب الحروف العربية")
+        spinner(listOf("قياسي (مثل آيفون وويندوز)", "أبجدي (ا ب ت ث ج…)"), "arlayout")
+
+        val hl = TextView(this).apply { setTextColor(Color.WHITE) }
         fun hText(v: Int) { hl.text = "ارتفاع الكيبورد: $v%" }
         title("الحجم")
         l.addView(hl)
@@ -57,19 +79,10 @@ class SettingsActivity : Activity() {
         })
 
         title("السمة")
-        l.addView(Spinner(this).apply {
-            adapter = ArrayAdapter(this@SettingsActivity, android.R.layout.simple_spinner_dropdown_item,
-                listOf("داكن", "فاتح", "أسود AMOLED", "أزرق", "وردي"))
-            setSelection(p.getInt("theme", 0))
-            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(a: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                    p.edit().putInt("theme", pos).apply()
-                }
-                override fun onNothingSelected(a: AdapterView<*>?) {}
-            }
-        })
+        spinner(listOf("داكن", "فاتح", "أسود AMOLED", "أزرق", "وردي"), "theme")
 
         title("الخيارات")
+        sw("معاينة الحرف عند الضغط", "preview", true)
         sw("الاهتزاز", "haptic", true)
         sw("صوت الضغط", "sound", false)
         sw("صف الأرقام", "numrow", true)
@@ -78,15 +91,15 @@ class SettingsActivity : Activity() {
 
         title("نصائح")
         l.addView(TextView(this).apply {
-            text = "• اضغط مطولاً على أي حرف لرؤية بدائله (أ إ آ، é، ٢...)\n" +
-                "• اضغط مطولاً على 🌐 لتبديل الكيبورد\n" +
+            setTextColor(Color.parseColor("#CCCCCC"))
+            text = "• اسحب على المسافة يميناً ويساراً لتحريك المؤشر\n" +
+                "• اسحب ⌫ لليسار لحذف كلمات، أو اضغط عليه مطولاً\n" +
+                "• اضغط مطولاً على أي حرف لبدائله (أ إ آ، é، ٢…)\n" +
+                "• اضغط مطولاً على الأرقام للرموز (! @ # …)\n" +
                 "• اضغط مرتين على ⇧ لقفل الحروف الكبيرة\n" +
-                "• 📋 يفتح سجل الحافظة (ثبّت 📌 ما تريد)\n" +
-                "• 🤚 وضع اليد الواحدة، 🎨 تغيير السمة\n" +
-                "• اضغط مطولاً على ⌫ لحذف كلمات كاملة\n" +
-                "• ⚡ الأدوات: عكس اللغة، حاسبة، تفقيط، زخرفة، عربيزي، تاريخ هجري، اختصاراتي، تخفّي\n" +
+                "• ⚡ لوحة الأدوات: عكس اللغة، حاسبة، تفقيط، زخرفة، عربيزي، تاريخ هجري، عبارات، اختصاراتي، نسخ/قص الكل، كلمة سر، تخفّي…\n" +
                 "• 🎤 إملاء صوتي (يحتاج خدمة Google)"
         })
-        setContentView(ScrollView(this).apply { addView(l) })
+        setContentView(ScrollView(this).apply { setBackgroundColor(bg); addView(l) })
     }
 }
