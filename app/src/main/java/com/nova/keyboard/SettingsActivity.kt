@@ -45,7 +45,7 @@ class SettingsActivity : Activity() {
             }
         }.also { l.addView(it) }
 
-        l.addView(TextView(this).apply { text = "Nova Keyboard 4.0"; textSize = 26f; setTextColor(Color.WHITE) })
+        l.addView(TextView(this).apply { text = "Nova Keyboard 4.1"; textSize = 26f; setTextColor(Color.WHITE) })
         l.addView(Button(this).apply {
             text = "1) تفعيل الكيبورد"
             setOnClickListener { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
@@ -59,7 +59,7 @@ class SettingsActivity : Activity() {
         })
 
         title("ترتيب الحروف العربية")
-        spinner(listOf("قياسي (مثل آيفون وويندوز)", "أبجدي (ا ب ت ث ج…)"), "arlayout")
+        spinner(listOf("قياسي (ويندوز / آيفون / Gboard)", "أبجدي (ا ب ت ث ج…)", "قياسي مع ذ ظاهرة"), "arlayout")
 
         val hl = TextView(this).apply { setTextColor(Color.WHITE) }
         fun hText(v: Int) { hl.text = "ارتفاع الكيبورد: $v%" }

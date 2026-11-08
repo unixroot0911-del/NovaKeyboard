@@ -5,7 +5,10 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.inputmethodservice.InputMethodService
 import android.media.AudioManager
 import android.os.Handler
@@ -36,17 +39,25 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 
+private fun blend(a: Int, b: Int, t: Float): Int {
+    fun ch(sh: Int) = (((a shr sh) and 255) * (1 - t) + ((b shr sh) and 255) * t).toInt().coerceIn(0, 255)
+    return (0xFF shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+}
+
 class KeyboardService : InputMethodService() {
     private enum class Mode { AR, EN, SYM, SYM2, EMO, CLIP, TOOLS, STYLE, DATE, SNIP, PHR, KAO }
-    private class Th(val bg: Int, val key: Int, val sp: Int, val fg: Int, val acc: Int, val accFg: Int)
+    private class Th(val bg: Int, val key: Int, val sp: Int, val fg: Int) {
+        val acc: Int = blend(sp, fg, 0.30f)
+        val accFg: Int = fg
+    }
 
     private fun col(x: Long) = x.toInt()
     private val themes = listOf(
-        Th(col(0xFF1B1B1F), col(0xFF3A3B41), col(0xFF2A2B30), col(0xFFFFFFFF), col(0xFF4C8DFF), col(0xFFFFFFFF)),
-        Th(col(0xFFE3E6EA), col(0xFFFFFFFF), col(0xFFC5CAD1), col(0xFF111111), col(0xFF1A73E8), col(0xFFFFFFFF)),
-        Th(col(0xFF000000), col(0xFF1C1C1E), col(0xFF2C2C2E), col(0xFFFFFFFF), col(0xFF0A84FF), col(0xFFFFFFFF)),
-        Th(col(0xFF0D2538), col(0xFF17405F), col(0xFF0F3047), col(0xFFE8F4FF), col(0xFF29B6F6), col(0xFF00243A)),
-        Th(col(0xFF2B1520), col(0xFF4A2535), col(0xFF38202B), col(0xFFFFE9F1), col(0xFFFF4F8B), col(0xFFFFFFFF))
+        Th(col(0xFF101012), col(0xFF3B3C43), col(0xFF5A5C66), col(0xFFFFFFFF)),
+        Th(col(0xFFD9DDE2), col(0xFFFFFFFF), col(0xFFB4BAC3), col(0xFF111111)),
+        Th(col(0xFF000000), col(0xFF222225), col(0xFF45464C), col(0xFFFFFFFF)),
+        Th(col(0xFF0A1F30), col(0xFF18486B), col(0xFF2F72A0), col(0xFFEAF6FF)),
+        Th(col(0xFF24101A), col(0xFF4D2738), col(0xFF7A4560), col(0xFFFFEEF4))
     )
 
     private var mode = Mode.AR
@@ -81,7 +92,11 @@ class KeyboardService : InputMethodService() {
     private val ar = listOf(
         "ض ص ث ق ف غ ع ه خ ح ج د".split(" "),
         "ش س ي ب ل ا ت ن م ك ط".split(" "),
-        "ذ ئ ء ؤ ر ى ة و ز ظ".split(" "))
+        "ئ ء ؤ ر لا ى ة و ز ظ".split(" "))
+    private val arZ = listOf(
+        "ض ص ث ق ف غ ع ه خ ح ج د".split(" "),
+        "ش س ي ب ل ا ت ن م ك ط".split(" "),
+        "ذ ئ ء ؤ ر لا ى ة و ز".split(" "))
     private val arAlpha = listOf(
         "ا ب ت ث ج ح خ د ذ ر ز".split(" "),
         "س ش ص ض ط ظ ع غ ف ق ك".split(" "),
@@ -105,7 +120,7 @@ class KeyboardService : InputMethodService() {
 
     private val altMap: Map<String, List<String>> = mapOf(
         "ا" to listOf("أ", "إ", "آ", "ٱ"), "ي" to listOf("ى", "ئ"), "ه" to listOf("ة"),
-        "و" to listOf("ؤ", "ء"), "ل" to listOf("لا", "لأ", "لإ", "لآ"), "ك" to listOf("گ"),
+        "و" to listOf("ؤ", "ء"), "لا" to listOf("لأ", "لإ", "لآ"), "د" to listOf("ذ"), "ز" to listOf("ذ"), "ك" to listOf("گ"),
         "ب" to listOf("پ"), "ج" to listOf("چ"), "ف" to listOf("ڤ"), "ط" to listOf("ظ"),
         "a" to listOf("à", "á", "â", "ä", "æ", "ã", "å", "ā"), "e" to listOf("è", "é", "ê", "ë", "ē"),
         "i" to listOf("ì", "í", "î", "ï"), "o" to listOf("ò", "ó", "ô", "ö", "œ"),
@@ -233,7 +248,7 @@ class KeyboardService : InputMethodService() {
             key("🎨", 1f, 1, sz = s) {
                 prefs.edit().putInt("theme", (prefs.getInt("theme", 0) + 1) % themes.size).apply(); render()
             },
-            key("🤚", 1f, if (prefs.getInt("onehand", 0) != 0) 2 else 1, sz = s) {
+            key("🤚", 1f, if (prefs.getInt("onehand", 0) != 0) 3 else 1, sz = s) {
                 prefs.edit().putInt("onehand", (prefs.getInt("onehand", 0) + 1) % 3).apply(); render()
             },
             key("⚙", 1f, 1, sz = s) { openSettings() }
@@ -247,9 +262,9 @@ class KeyboardService : InputMethodService() {
             }))
         }
         val layout = prefs.getInt("arlayout", 0)
-        val stdAr = mode == Mode.AR && shift == 0 && layout == 0
+        val stdAr = mode == Mode.AR && shift == 0 && layout != 1
         val rows = when (mode) {
-            Mode.AR -> if (shift != 0) arShift else if (layout == 1) arAlpha else ar
+            Mode.AR -> if (shift != 0) arShift else when (layout) { 1 -> arAlpha; 2 -> arZ; else -> ar }
             Mode.EN -> en
             Mode.SYM -> sym
             else -> sym2
@@ -264,8 +279,8 @@ class KeyboardService : InputMethodService() {
         val sw = if (stdAr) 1.2f else 1.5f
         val r3 = mutableListOf<View>()
         when (mode) {
-            Mode.AR -> r3.add(key("◌َ", sw, if (shift != 0) 2 else 1) { onShift() })
-            Mode.EN -> r3.add(key(if (shift == 0) "⇧" else if (shift == 1) "⬆" else "⇪", sw, if (shift != 0) 2 else 1) { onShift() })
+            Mode.AR -> r3.add(key("◌َ", sw, if (shift != 0) 3 else 1) { onShift() })
+            Mode.EN -> r3.add(key(if (shift == 0) "⇧" else if (shift == 1) "⬆" else "⇪", sw, if (shift != 0) 3 else 1) { onShift() })
             Mode.SYM -> r3.add(key("=\\<", sw, 1) { mode = Mode.SYM2; render() })
             else -> r3.add(key("123", sw, 1) { mode = Mode.SYM; render() })
         }
@@ -306,7 +321,7 @@ class KeyboardService : InputMethodService() {
     private fun emojiPanel(h: Int) {
         val cats = listOf("🕘", "😀", "👍", "🐶", "⚽", "🇸🇦")
         root.addView(row(h, cats.mapIndexed { i, c ->
-            key(c, 1f, if (i == emojiCat) 2 else 1, sz = curH * 0.38f) { emojiCat = i; render() }
+            key(c, 1f, if (i == emojiCat) 3 else 1, sz = curH * 0.38f) { emojiCat = i; render() }
         }))
         val list = if (emojiCat == 0) recents() else emojiData[emojiCat - 1].split(" ").filter { it.isNotEmpty() }
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -369,7 +384,7 @@ class KeyboardService : InputMethodService() {
             }
             colv.addView(row(h, listOf(
                 card,
-                key("📌", 0.8f, if (pin) 2 else 1, onUp = true, sz = curH * 0.32f) { togglePin(txt); render() },
+                key("📌", 0.8f, if (pin) 3 else 1, onUp = true, sz = curH * 0.32f) { togglePin(txt); render() },
                 key("✕", 0.8f, 1, onUp = true, sz = curH * 0.32f) { saveClips(loadClips().filter { it.first != txt }); render() }
             )))
         }
@@ -393,9 +408,15 @@ class KeyboardService : InputMethodService() {
         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, w)
     }
 
-    private fun rounded(c: Int) = GradientDrawable().apply {
-        cornerRadius = dp(8).toFloat(); setColor(c)
-        setStroke(1, (th.fg and 0x00FFFFFF) or 0x1F000000)
+    private fun rounded(c: Int, active: Boolean = false): Drawable {
+        val t = th
+        val r = dp(8).toFloat()
+        val shadow = GradientDrawable().apply { cornerRadius = r; setColor(blend(c, 0xFF000000.toInt(), 0.45f)) }
+        val face = GradientDrawable().apply {
+            cornerRadius = r; setColor(c)
+            if (active) setStroke(dp(2), t.fg) else setStroke(1, (t.fg and 0x00FFFFFF) or 0x33000000)
+        }
+        return LayerDrawable(arrayOf(shadow, face)).apply { setLayerInset(1, 0, 0, 0, dp(2)) }
     }
 
     private fun key(
@@ -405,16 +426,17 @@ class KeyboardService : InputMethodService() {
         onAlt: ((String) -> Unit)? = null, onTap: () -> Unit
     ): View {
         val t = th
-        val bgc = when (style) { 1 -> t.sp; 2 -> t.acc; else -> t.key }
-        val fgc = if (style == 2) t.accFg else t.fg
+        val bgc = when (style) { 1 -> t.sp; 2, 3 -> t.acc; else -> t.key }
+        val fgc = t.fg
         val tv = TextView(this)
         tv.text = label
         tv.gravity = Gravity.CENTER
         tv.setTextColor(fgc)
         tv.includeFontPadding = false
+        tv.typeface = if (style != 0) Typeface.DEFAULT_BOLD else Typeface.create("sans-serif-medium", Typeface.NORMAL)
         val px = if (sz > 0f) sz else if (label.codePointCount(0, label.length) > 2) curH * 0.27f else curH * 0.40f
         tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, px)
-        tv.background = rounded(bgc)
+        tv.background = rounded(bgc, style == 3)
         val mx = maxOf(1, (dp(1) * 1.5f).toInt())
         tv.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, w).apply {
             setMargins(mx, dp(3), mx, dp(3))
@@ -843,7 +865,7 @@ class KeyboardService : InputMethodService() {
         )
         val colv = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         tiles.chunked(4).forEach { r ->
-            val views = r.map { (label, acc, act) -> key(label, 1f, if (acc) 2 else 1, sz = curH * 0.25f) { act() } }.toMutableList()
+            val views = r.map { (label, acc, act) -> key(label, 1f, if (acc) 3 else 1, sz = curH * 0.25f) { act() } }.toMutableList()
             for (i in r.size until 4) views.add(spacer(1f))
             colv.addView(row(h, views))
         }
