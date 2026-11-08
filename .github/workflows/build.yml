@@ -13,7 +13,12 @@ jobs:
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: 8.7 }
+      - name: Restore signing key
+        run: echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > $RUNNER_TEMP/nova.jks
       - run: gradle assembleDebug --no-daemon
+        env:
+          KS_FILE: ${{ runner.temp }}/nova.jks
+          KS_PASS: ${{ secrets.KS_PASS }}
       - uses: actions/upload-artifact@v4
         with:
           name: NovaKeyboard-apk
