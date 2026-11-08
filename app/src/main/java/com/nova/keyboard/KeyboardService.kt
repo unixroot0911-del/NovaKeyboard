@@ -25,12 +25,17 @@ import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.chrono.HijrahDate
+import java.time.temporal.ChronoField
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 
 class KeyboardService : InputMethodService() {
-    private enum class Mode { AR, EN, SYM, SYM2, EMO, CLIP }
+    private enum class Mode { AR, EN, SYM, SYM2, EMO, CLIP, TOOLS, STYLE, DATE, SNIP }
     private class Th(val bg: Int, val key: Int, val sp: Int, val fg: Int, val acc: Int, val accFg: Int)
 
     private fun col(x: Long) = x.toInt()
@@ -50,6 +55,13 @@ class KeyboardService : InputMethodService() {
     private var emojiCat = 1
     private var curH = 0
     private var repCount = 0
+    private var undoOrig: String? = null
+    private var undoNew: String? = null
+
+    companion object {
+        @Volatile var pendingVoice: String? = null
+        @Volatile var instance: KeyboardService? = null
+    }
     private lateinit var outer: FrameLayout
     private lateinit var root: LinearLayout
     private lateinit var cm: ClipboardManager
@@ -110,6 +122,7 @@ class KeyboardService : InputMethodService() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         cm.addPrimaryClipChangedListener(clipListener)
         letterMode = if (prefs.getInt("lang", 0) == 1) Mode.EN else Mode.AR
@@ -118,6 +131,7 @@ class KeyboardService : InputMethodService() {
 
     override fun onDestroy() {
         cm.removePrimaryClipChangedListener(clipListener)
+        instance = null
         super.onDestroy()
     }
 
@@ -154,6 +168,7 @@ class KeyboardService : InputMethodService() {
         }
         if (::root.isInitialized) render()
         if (!restarting) autoCap()
+        flushVoice()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -189,6 +204,11 @@ class KeyboardService : InputMethodService() {
         when (mode) {
             Mode.EMO -> emojiPanel(h)
             Mode.CLIP -> clipPanel(h)
+            Mode.TOOLS -> toolsPanel(h)
+            Mode.STYLE -> choicePanel(h, "✨ زخرفة وأنماط الخط",
+                Tools.styles.map { (label, f) -> label to { applyStyle(f) } })
+            Mode.DATE -> choicePanel(h, "📅 التاريخ والوقت", dateItems().map { s -> s to { insertText(s) } })
+            Mode.SNIP -> snipPanel(h)
             else -> keysPanel(h)
         }
     }
@@ -196,17 +216,18 @@ class KeyboardService : InputMethodService() {
     private fun toolbar(h: Int): View {
         val s = curH * 0.30f
         return row((h * 0.8f).toInt(), listOf(
-            key("⚙", 1f, 1, sz = s) { openSettings() },
+            key("⚡", 1f, 2, sz = s) { mode = Mode.TOOLS; render() },
             key("📋", 1f, 1, sz = s) { mode = Mode.CLIP; render() },
+            key("🎤", 1f, 1, sz = s) { startVoice() },
+            key("◀", 1f, 1, repeat = true, sz = s) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) },
+            key("▶", 1f, 1, repeat = true, sz = s) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) },
             key("🎨", 1f, 1, sz = s) {
                 prefs.edit().putInt("theme", (prefs.getInt("theme", 0) + 1) % themes.size).apply(); render()
             },
-            key("◀", 1f, 1, repeat = true, sz = s) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) },
-            key("▶", 1f, 1, repeat = true, sz = s) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) },
             key("🤚", 1f, if (prefs.getInt("onehand", 0) != 0) 2 else 1, sz = s) {
                 prefs.edit().putInt("onehand", (prefs.getInt("onehand", 0) + 1) % 3).apply(); render()
             },
-            key("⌄", 1f, 1, sz = s) { requestHideSelf(0) }
+            key("⚙", 1f, 1, sz = s) { openSettings() }
         ))
     }
 
@@ -632,10 +653,253 @@ class KeyboardService : InputMethodService() {
 
     private fun captureClip() {
         try {
+            if (prefs.getBoolean("incog", false)) return
             val d = cm.primaryClipDescription
             if (d?.extras?.getBoolean("android.content.extra.IS_SENSITIVE") == true) return
             val t = cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()
             if (!t.isNullOrBlank() && t.length < 20000) addClip(t)
         } catch (e: Throwable) {}
+    }
+
+    // ---------- tools ----------
+    private class Tg(val text: String, val delB: Int, val delA: Int)
+
+    private val calcRe = Regex("[0-9٠-٩.,٫٬+\\-*/xX×÷^%()=\\s]+\\z")
+    private val numRe = Regex("[0-9٠-٩][0-9٠-٩,٬]*\\z")
+
+    private fun toast(m: String) { Toast.makeText(this, m, Toast.LENGTH_SHORT).show() }
+
+    private fun done() { mode = letterMode; render() }
+
+    private fun getTg(chunk: Regex?): Tg? {
+        val ic = currentInputConnection ?: return null
+        val sel = ic.getSelectedText(0)?.toString()
+        if (!sel.isNullOrEmpty()) return Tg(sel, 0, 0)
+        val b = ic.getTextBeforeCursor(5000, 0)?.toString() ?: ""
+        if (chunk == null) {
+            val a = ic.getTextAfterCursor(5000, 0)?.toString() ?: ""
+            val all = b + a
+            return if (all.isEmpty()) null else Tg(all, b.length, a.length)
+        }
+        val m = chunk.find(b) ?: return null
+        return Tg(m.value, m.value.length, 0)
+    }
+
+    private fun applyTg(tg: Tg, out: String) {
+        val ic = currentInputConnection ?: return
+        ic.beginBatchEdit()
+        if (tg.delB > 0 || tg.delA > 0) ic.deleteSurroundingText(tg.delB, tg.delA)
+        ic.commitText(out, 1)
+        ic.endBatchEdit()
+        undoOrig = tg.text
+        undoNew = out
+    }
+
+    private fun toolConvert() {
+        val tg = getTg(null) ?: return toast("اكتب نصاً أو حدّده أولاً")
+        applyTg(tg, Tools.convertLayout(tg.text)); done()
+    }
+
+    private fun toolClean() {
+        val tg = getTg(null) ?: return toast("اكتب نصاً أو حدّده أولاً")
+        applyTg(tg, Tools.clean(tg.text)); done()
+    }
+
+    private fun toolArabizi() {
+        val tg = getTg(null) ?: return toast("اكتب مثل: mar7aba ثم اضغط")
+        applyTg(tg, Tools.arabizi(tg.text)); done()
+    }
+
+    private fun applyStyle(f: (String) -> String) {
+        val tg = getTg(null) ?: return toast("اكتب نصاً أو حدّده أولاً")
+        applyTg(tg, f(tg.text)); done()
+    }
+
+    private fun toolCalc() {
+        var tg = getTg(calcRe) ?: return toast("اكتب عملية مثل 25*4+10")
+        if (tg.delB > 0 && tg.delA == 0) {
+            val lead = tg.text.indexOfFirst { it.isDigit() || it == '(' || it == '-' || it == '.' }
+            if (lead < 0) return toast("اكتب عملية مثل 25*4+10")
+            val t2 = tg.text.substring(lead)
+            tg = Tg(t2, t2.length, 0)
+        }
+        val r = Tools.calc(tg.text) ?: return toast("اكتب عملية صحيحة مثل 25*4+10")
+        applyTg(tg, r); done()
+    }
+
+    private fun toolTafqeet() {
+        val tg = getTg(numRe) ?: return toast("اكتب رقماً أو حدّده أولاً")
+        val n = Tools.normalizeDigits(tg.text).trim().toLongOrNull() ?: return toast("الرقم غير صالح")
+        val w = Tools.tafqeet(n) ?: return toast("الرقم كبير جداً")
+        applyTg(tg, "${tg.text} ($w)"); done()
+    }
+
+    private fun toolUndo() {
+        val o = undoOrig
+        val n = undoNew
+        val ic = currentInputConnection
+        if (o == null || n == null || ic == null) { toast("لا يوجد شيء للتراجع عنه"); return }
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(n.length, 0)
+        ic.commitText(o, 1)
+        ic.endBatchEdit()
+        undoOrig = null; undoNew = null
+        done()
+    }
+
+    private fun insertText(s: String) { commit(s); done() }
+
+    private fun dateItems(): List<String> {
+        val dayNames = listOf("الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت", "الأحد")
+        val gM = listOf("يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر")
+        val hM = listOf("محرم", "صفر", "ربيع الأول", "ربيع الآخر", "جمادى الأولى", "جمادى الآخرة", "رجب", "شعبان", "رمضان", "شوال", "ذو القعدة", "ذو الحجة")
+        val ld = LocalDate.now()
+        val g = "${dayNames[ld.dayOfWeek.value - 1]} ${ld.dayOfMonth} ${gM[ld.monthValue - 1]} ${ld.year}م"
+        val out = mutableListOf(g)
+        try {
+            val hd = HijrahDate.from(ld)
+            val h = "${hd.get(ChronoField.DAY_OF_MONTH)} ${hM[hd.get(ChronoField.MONTH_OF_YEAR) - 1]} ${hd.get(ChronoField.YEAR)}هـ"
+            out.add(0, h)
+            out.add("$g  |  $h")
+        } catch (e: Throwable) {}
+        val tm = LocalTime.now()
+        val h12 = if (tm.hour % 12 == 0) 12 else tm.hour % 12
+        out.add(String.format("%d:%02d %s", h12, tm.minute, if (tm.hour < 12) "ص" else "م"))
+        out.add(ld.toString())
+        out.add(ld.toString() + " " + String.format("%02d:%02d", tm.hour, tm.minute))
+        return out
+    }
+
+    private fun header(h: Int, title: String, back: () -> Unit, extra: View? = null): View {
+        val t = th
+        val v = mutableListOf<View>(
+            key("⬅", 1.2f, 1) { back() },
+            TextView(this).apply {
+                text = title; setTextColor(t.fg); gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, curH * 0.30f)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, if (extra == null) 4.8f else 2.6f)
+            })
+        if (extra != null) v.add(extra)
+        return row(h, v)
+    }
+
+    private fun toolsPanel(h: Int) {
+        root.addView(header(h, "⚡ أدوات نوفا", { mode = letterMode; render() }))
+        val incog = prefs.getBoolean("incog", false)
+        val tiles = listOf<Pair<String, () -> Unit>>(
+            "🔄\nعكس اللغة" to { toolConvert() },
+            "🧮\nحاسبة" to { toolCalc() },
+            "🔢\nتفقيط" to { toolTafqeet() },
+            "✨\nزخرفة" to { mode = Mode.STYLE; render() },
+            "🧹\nتنظيف" to { toolClean() },
+            "🔤\nعربيزي" to { toolArabizi() },
+            "📅\nالتاريخ" to { mode = Mode.DATE; render() },
+            "🎤\nإملاء" to { done(); startVoice() },
+            "📝\nاختصاراتي" to { mode = Mode.SNIP; render() },
+            "↩\nتراجع" to { toolUndo() },
+            (if (incog) "🕶\nتخفّي ✓" else "🕶\nتخفّي") to { prefs.edit().putBoolean("incog", !incog).apply(); render() },
+            "📋\nالحافظة" to { mode = Mode.CLIP; render() }
+        )
+        tiles.chunked(4).forEachIndexed { ri, r ->
+            root.addView(row(h, r.mapIndexed { ci, p ->
+                key(p.first, 1f, if (ri * 4 + ci == 10 && incog) 2 else 1, sz = curH * 0.25f) { p.second() }
+            }))
+        }
+        root.addView(panelBottom(h))
+    }
+
+    private fun cardView(label: String, act: () -> Unit): TextView {
+        val t = th
+        return TextView(this).apply {
+            text = label; maxLines = 2; ellipsize = TextUtils.TruncateAt.END
+            setTextColor(t.fg); setTextSize(TypedValue.COMPLEX_UNIT_PX, curH * 0.30f)
+            setPadding(dp(14), 0, dp(14), 0); gravity = Gravity.CENTER_VERTICAL
+            background = rounded(t.key)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
+                setMargins(dp(2), dp(3), dp(2), dp(3))
+            }
+            setOnClickListener { feedback(it); act() }
+        }
+    }
+
+    private fun choicePanel(h: Int, title: String, items: List<Pair<String, () -> Unit>>) {
+        root.addView(header(h, title, { mode = Mode.TOOLS; render() }))
+        val colv = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        items.forEach { (label, act) -> colv.addView(row(h, listOf(cardView(label, act)))) }
+        root.addView(ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, h * 3)
+            isVerticalScrollBarEnabled = false
+            addView(colv)
+        })
+        root.addView(panelBottom(h))
+    }
+
+    private fun snipPanel(h: Int) {
+        val t = th
+        val l = loadSnips()
+        root.addView(header(h, "📝 اختصاراتي · ${l.size}", { mode = Mode.TOOLS; render() }, key("➕ إضافة", 2.2f, 2) { addSnip() }))
+        val colv = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        if (l.isEmpty()) {
+            colv.addView(TextView(this).apply {
+                text = "احفظ هنا رقمك أو إيميلك أو عنوانك أو الآيبان\nحدّد النص أو انسخه ثم اضغط ➕ إضافة"
+                setTextColor(t.fg); gravity = Gravity.CENTER; alpha = 0.7f
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, h * 3)
+            })
+        }
+        l.forEach { txt ->
+            colv.addView(row(h, listOf(
+                cardView(txt.replace("\n", " ")) { commit(txt); done() },
+                key("✕", 0.8f, 1, onUp = true, sz = curH * 0.32f) { saveSnips(loadSnips().filter { it != txt }); render() }
+            )))
+        }
+        root.addView(ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, h * 3)
+            isVerticalScrollBarEnabled = false
+            addView(colv)
+        })
+        root.addView(panelBottom(h))
+    }
+
+    private fun loadSnips(): MutableList<String> {
+        val out = mutableListOf<String>()
+        try {
+            val a = JSONArray(prefs.getString("snips", "[]"))
+            for (i in 0 until a.length()) out.add(a.getString(i))
+        } catch (e: Exception) {}
+        return out
+    }
+
+    private fun saveSnips(l: List<String>) {
+        val a = JSONArray()
+        l.forEach { a.put(it) }
+        prefs.edit().putString("snips", a.toString()).apply()
+    }
+
+    private fun addSnip() {
+        val sel = currentInputConnection?.getSelectedText(0)?.toString()
+        val s = if (!sel.isNullOrBlank()) sel else loadClips().firstOrNull()?.first
+        if (s.isNullOrBlank()) { toast("حدّد نصاً أو انسخه ثم اضغط إضافة"); return }
+        val l = loadSnips()
+        if (!l.contains(s)) { l.add(0, s); saveSnips(l) }
+        toast("تمت الإضافة")
+        render()
+    }
+
+    // ---------- voice ----------
+    private fun startVoice() {
+        val lang = if (letterMode == Mode.AR) "ar-SA" else "en-US"
+        try {
+            startActivity(Intent(this, VoiceActivity::class.java).putExtra("lang", lang)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION))
+        } catch (e: Exception) { toast("الإملاء الصوتي غير متاح") }
+    }
+
+    fun postFlush() { handler.postDelayed({ flushVoice() }, 600) }
+
+    private fun flushVoice() {
+        val t = pendingVoice ?: return
+        if (currentInputConnection == null) return
+        pendingVoice = null
+        commit("$t ")
     }
 }

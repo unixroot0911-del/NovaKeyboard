@@ -28,7 +28,7 @@ class SettingsActivity : Activity() {
             setOnCheckedChangeListener { _, c -> p.edit().putBoolean(k, c).apply() }
         }.also { l.addView(it) }
 
-        l.addView(TextView(this).apply { text = "Nova Keyboard 2.0"; textSize = 24f })
+        l.addView(TextView(this).apply { text = "Nova Keyboard 3.0"; textSize = 24f })
         l.addView(Button(this).apply {
             text = "1) تفعيل الكيبورد"
             setOnClickListener { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
@@ -83,7 +83,9 @@ class SettingsActivity : Activity() {
                 "• اضغط مرتين على ⇧ لقفل الحروف الكبيرة\n" +
                 "• 📋 يفتح سجل الحافظة (ثبّت 📌 ما تريد)\n" +
                 "• 🤚 وضع اليد الواحدة، 🎨 تغيير السمة\n" +
-                "• اضغط مطولاً على ⌫ لحذف كلمات كاملة"
+                "• اضغط مطولاً على ⌫ لحذف كلمات كاملة\n" +
+                "• ⚡ الأدوات: عكس اللغة، حاسبة، تفقيط، زخرفة، عربيزي، تاريخ هجري، اختصاراتي، تخفّي\n" +
+                "• 🎤 إملاء صوتي (يحتاج خدمة Google)"
         })
         setContentView(ScrollView(this).apply { addView(l) })
     }

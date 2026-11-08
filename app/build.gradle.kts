@@ -10,7 +10,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "2").toInt() + 100
-        versionName = "2.0"
+        versionName = "3.0"
     }
     signingConfigs {
         create("nova") {
