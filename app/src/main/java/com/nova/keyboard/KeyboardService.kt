@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
@@ -38,6 +39,7 @@ import java.security.SecureRandom
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
+import kotlin.math.hypot
 
 private fun blend(a: Int, b: Int, t: Float): Int {
     fun ch(sh: Int) = (((a shr sh) and 255) * (1 - t) + ((b shr sh) and 255) * t).toInt().coerceIn(0, 255)
@@ -45,8 +47,8 @@ private fun blend(a: Int, b: Int, t: Float): Int {
 }
 
 class KeyboardService : InputMethodService() {
-    private enum class Mode { AR, EN, SYM, SYM2, EMO, CLIP, TOOLS, STYLE, DATE, SNIP, PHR, KAO }
-    private class Th(val bg: Int, val key: Int, val sp: Int, val fg: Int) {
+    private enum class Mode { AR, EN, SYM, SYM2, EMO, CLIP, TOOLS, STYLE, DATE, SNIP, PHR, KAO, COLOR }
+    private class Th(val bg: Int, val key: Int, val sp: Int, val fg: Int, val tx: Int = fg) {
         val acc: Int = blend(sp, fg, 0.30f)
         val accFg: Int = fg
     }
@@ -80,7 +82,11 @@ class KeyboardService : InputMethodService() {
     private lateinit var cm: ClipboardManager
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("nova", MODE_PRIVATE) }
-    private val th: Th get() = themes[prefs.getInt("theme", 0).coerceIn(0, themes.size - 1)]
+    private val th: Th get() = when {
+        prefs.getBoolean("rainbow", false) -> rainbowTh
+        prefs.getBoolean("custom", false) -> customTh()
+        else -> themes[prefs.getInt("theme", 0).coerceIn(0, themes.size - 1)]
+    }
 
     private var popup: PopupWindow? = null
     private var popAlts: List<String> = emptyList()
@@ -152,6 +158,7 @@ class KeyboardService : InputMethodService() {
 
     override fun onDestroy() {
         cm.removePrimaryClipChangedListener(clipListener)
+        stopAnim()
         instance = null
         super.onDestroy()
     }
@@ -194,6 +201,7 @@ class KeyboardService : InputMethodService() {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         dismissPopup()
+        stopAnim()
         super.onFinishInputView(finishingInput)
     }
 
@@ -211,6 +219,7 @@ class KeyboardService : InputMethodService() {
     private fun render() {
         dismissPopup()
         dismissPreview()
+        rkeys.clear(); posReady = false
         val t = th
         val h = keyH()
         curH = h
@@ -231,10 +240,12 @@ class KeyboardService : InputMethodService() {
                 Tools.styles.map { (label, f) -> label to { applyStyle(f) } })
             Mode.DATE -> choicePanel(h, "📅 التاريخ والوقت", dateItems().map { s -> s to { insertText(s) } })
             Mode.SNIP -> snipPanel(h)
+            Mode.COLOR -> colorPanel(h)
             Mode.PHR -> choicePanel(h, "🕌 عبارات ورموز", phraseItems().map { (l, x) -> l to { insertText(x) } })
             Mode.KAO -> choicePanel(h, "😜 كاموجي", kaoItems().map { x -> x to { insertText(x) } })
             else -> keysPanel(h)
         }
+        if (rainbowOn()) startAnim() else stopAnim()
     }
 
     private fun toolbar(h: Int): View {
@@ -245,8 +256,10 @@ class KeyboardService : InputMethodService() {
             key("🎤", 1f, 1, sz = s) { startVoice() },
             key("◀", 1f, 1, repeat = true, sz = s) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) },
             key("▶", 1f, 1, repeat = true, sz = s) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) },
-            key("🎨", 1f, 1, sz = s) {
-                prefs.edit().putInt("theme", (prefs.getInt("theme", 0) + 1) % themes.size).apply(); render()
+            key("🎨", 1f, 1, sz = s, onLong = { mode = Mode.COLOR; render() }) {
+                prefs.edit().putBoolean("rainbow", false).putBoolean("custom", false)
+                    .putInt("theme", (prefs.getInt("theme", 0) + 1) % themes.size).apply()
+                ripples.clear(); render()
             },
             key("🤚", 1f, if (prefs.getInt("onehand", 0) != 0) 3 else 1, sz = s) {
                 prefs.edit().putInt("onehand", (prefs.getInt("onehand", 0) + 1) % 3).apply(); render()
@@ -327,7 +340,7 @@ class KeyboardService : InputMethodService() {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         if (list.isEmpty()) {
             col.addView(TextView(this).apply {
-                text = "لا توجد إيموجي حديثة بعد"; setTextColor(th.fg); gravity = Gravity.CENTER
+                text = "لا توجد إيموجي حديثة بعد"; setTextColor(th.tx); gravity = Gravity.CENTER
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, h * 3)
             })
         }
@@ -356,7 +369,7 @@ class KeyboardService : InputMethodService() {
         root.addView(row(h, listOf(
             key("⌨", 1.2f, 1) { mode = letterMode; render() },
             TextView(this).apply {
-                text = "الحافظة · ${clips.size}"; setTextColor(t.fg); gravity = Gravity.CENTER
+                text = "الحافظة · ${clips.size}"; setTextColor(t.tx); gravity = Gravity.CENTER
                 setTextSize(TypedValue.COMPLEX_UNIT_PX, curH * 0.34f)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 3.6f)
             },
@@ -366,7 +379,7 @@ class KeyboardService : InputMethodService() {
         if (clips.isEmpty()) {
             colv.addView(TextView(this).apply {
                 text = "لا يوجد شيء منسوخ بعد\nانسخ أي نص وسيظهر هنا"
-                setTextColor(t.fg); gravity = Gravity.CENTER; alpha = 0.7f
+                setTextColor(t.tx); gravity = Gravity.CENTER; alpha = 0.7f
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, h * 3)
             })
         }
@@ -437,6 +450,10 @@ class KeyboardService : InputMethodService() {
         val px = if (sz > 0f) sz else if (label.codePointCount(0, label.length) > 2) curH * 0.27f else curH * 0.40f
         tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, px)
         tv.background = rounded(bgc, style == 3)
+        if (!onUp) {
+            val ld = tv.background as LayerDrawable
+            rkeys.add(RKey(tv, ld.getDrawable(1) as GradientDrawable, ld.getDrawable(0) as GradientDrawable, style))
+        }
         val mx = maxOf(1, (dp(1) * 1.5f).toInt())
         tv.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, w).apply {
             setMargins(mx, dp(3), mx, dp(3))
@@ -463,6 +480,7 @@ class KeyboardService : InputMethodService() {
                     v.alpha = 0.6f
                     if (!onUp) feedback(v)
                     if (showPrev) showPreview(v, label)
+                    if (!onUp && rainbowOn() && prefs.getBoolean("ripple", true)) startRipple(v)
                     if (repeat) { repCount = 0; onTap(); handler.postDelayed(rep, 330) }
                     else if (!deferred) onTap()
                     else if (!onUp) handler.postDelayed(longRun, 330)
@@ -828,7 +846,7 @@ class KeyboardService : InputMethodService() {
         val v = mutableListOf<View>(
             key("⬅", 1.2f, 1) { back() },
             TextView(this).apply {
-                text = title; setTextColor(t.fg); gravity = Gravity.CENTER
+                text = title; setTextColor(t.tx); gravity = Gravity.CENTER
                 setTextSize(TypedValue.COMPLEX_UNIT_PX, curH * 0.30f)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, if (extra == null) 4.8f else 2.6f)
             })
@@ -911,7 +929,7 @@ class KeyboardService : InputMethodService() {
         if (l.isEmpty()) {
             colv.addView(TextView(this).apply {
                 text = "احفظ هنا رقمك أو إيميلك أو عنوانك أو الآيبان\nحدّد النص أو انسخه ثم اضغط ➕ إضافة"
-                setTextColor(t.fg); gravity = Gravity.CENTER; alpha = 0.7f
+                setTextColor(t.tx); gravity = Gravity.CENTER; alpha = 0.7f
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, h * 3)
             })
         }
@@ -1100,4 +1118,179 @@ class KeyboardService : InputMethodService() {
         "¯\\_(ツ)_/¯", "(╯°□°)╯︵ ┻━┻", "┬─┬ノ( º _ ºノ)", "( ͡° ͜ʖ ͡°)", "(ಥ﹏ಥ)", "(づ｡◕‿‿◕｡)づ",
         "ʕ•ᴥ•ʔ", "(≧◡≦)", "o(≧▽≦)o", "٩(◕‿◕)۶", "(｡•́︿•̀｡)", "♥‿♥", "ಠ_ಠ", "(ง'̀-'́)ง", "(⌐■_■)", "(¬_¬)", "(^_^)v"
     )
+
+    // ---------- colors / rainbow ----------
+    private class RKey(val v: TextView, val face: GradientDrawable, val shadow: GradientDrawable, val style: Int) {
+        var nx = 0f
+        var ny = 0f
+    }
+    private class Rp(val x: Float, val y: Float, val hue: Float, val t0: Long)
+
+    private val rkeys = mutableListOf<RKey>()
+    private val ripples = mutableListOf<Rp>()
+    private var posReady = false
+    private var animating = false
+    private val rbStart = SystemClock.uptimeMillis()
+    private var fadeStart = 0L
+    private val rainbowTh by lazy { Th(col(0xFF0E0E10), col(0xFFE9EAF0), col(0xFFC3C6D2), col(0xFF101012), col(0xFFFFFFFF)) }
+    private val rbRun = object : Runnable {
+        override fun run() {
+            if (!animating) return
+            tick()
+            handler.postDelayed(this, 33)
+        }
+    }
+
+    private fun rainbowOn() = prefs.getBoolean("rainbow", false)
+
+    private fun customTh(): Th {
+        val c = Color.HSVToColor(floatArrayOf(prefs.getFloat("chue", 210f), prefs.getFloat("csat", 0.6f), prefs.getFloat("cval", 0.8f)))
+        val lum = (0.299f * Color.red(c) + 0.587f * Color.green(c) + 0.114f * Color.blue(c)) / 255f
+        val black = 0xFF000000.toInt()
+        val white = 0xFFFFFFFF.toInt()
+        return if (lum > 0.6f) Th(blend(c, black, 0.30f), c, blend(c, black, 0.18f), 0xFF111111.toInt())
+        else Th(blend(c, black, 0.72f), c, blend(c, white, 0.28f), white)
+    }
+
+    private fun startAnim() { if (!animating) { animating = true; handler.post(rbRun) } }
+    private fun stopAnim() { animating = false; handler.removeCallbacks(rbRun) }
+
+    private fun baseColor(style: Int, t: Th) = when (style) { 1 -> t.sp; 2, 3 -> t.acc; else -> t.key }
+
+    private fun computePositions() {
+        val rl = IntArray(2)
+        root.getLocationOnScreen(rl)
+        val w = root.width.toFloat().coerceAtLeast(1f)
+        val loc = IntArray(2)
+        for (k in rkeys) {
+            k.v.getLocationOnScreen(loc)
+            k.nx = (loc[0] - rl[0] + k.v.width / 2f) / w
+            k.ny = (loc[1] - rl[1] + k.v.height / 2f) / w
+        }
+        posReady = true
+    }
+
+    private fun startRipple(v: View) {
+        try {
+            val loc = IntArray(2)
+            v.getLocationOnScreen(loc)
+            val rl = IntArray(2)
+            root.getLocationOnScreen(rl)
+            val w = root.width.toFloat().coerceAtLeast(1f)
+            ripples.add(Rp((loc[0] - rl[0] + v.width / 2f) / w, (loc[1] - rl[1] + v.height / 2f) / w,
+                (Math.random() * 360).toFloat(), SystemClock.uptimeMillis()))
+            if (ripples.size > 6) ripples.removeAt(0)
+        } catch (e: Throwable) {}
+    }
+
+    private fun tick() {
+        if (!::root.isInitialized) return
+        if (!posReady) {
+            if (rkeys.isEmpty() || rkeys.any { it.v.width == 0 }) return
+            computePositions()
+        }
+        val now = SystemClock.uptimeMillis()
+        ripples.removeAll { now - it.t0 > 1100L }
+        val rb = rainbowOn()
+        if (!rb && ripples.isEmpty()) { stopAnim(); return }
+        val t = th
+        val period = longArrayOf(14000L, 8000L, 4000L)[prefs.getInt("rbspeed", 1).coerceIn(0, 2)]
+        val phase = ((now - rbStart) % period).toFloat() / period
+        val fade = ((now - fadeStart) / 900f).coerceIn(0f, 1f)
+        val hsv = FloatArray(3)
+        val black = 0xFF000000.toInt()
+        for (k in rkeys) {
+            var c = baseColor(k.style, t)
+            if (rb) {
+                hsv[0] = (phase * 360f + k.nx * 220f + k.ny * 140f) % 360f
+                hsv[1] = when (k.style) { 0 -> 0.50f; 1 -> 0.62f; else -> 0.72f }
+                hsv[2] = when (k.style) { 0 -> 0.96f; 1 -> 0.84f; else -> 0.74f }
+                c = blend(c, Color.HSVToColor(hsv), fade)
+            }
+            for (r in ripples) {
+                val age = (now - r.t0) / 1100f
+                val d = hypot(k.nx - r.x, k.ny - r.y)
+                val front = age * 1.25f
+                val inner = ((front - d + 0.12f) / 0.25f).coerceIn(0f, 1f)
+                val dist = (1f - d / 0.85f).coerceIn(0f, 1f)
+                val amp = inner * Math.pow(dist.toDouble(), 1.3).toFloat() * Math.pow((1f - age).toDouble().coerceAtLeast(0.0), 1.5).toFloat()
+                if (amp > 0.01f) {
+                    hsv[0] = r.hue; hsv[1] = 0.72f; hsv[2] = 0.98f
+                    c = blend(c, Color.HSVToColor(hsv), amp * 0.95f)
+                }
+            }
+            k.face.setColor(c)
+            k.shadow.setColor(blend(c, black, 0.45f))
+        }
+    }
+
+    private fun applyThemeLive() {
+        val t = th
+        outer.setBackgroundColor(t.bg)
+        val black = 0xFF000000.toInt()
+        for (k in rkeys) {
+            val c = baseColor(k.style, t)
+            k.face.setColor(c)
+            k.shadow.setColor(blend(c, black, 0.45f))
+            k.v.setTextColor(t.fg)
+        }
+    }
+
+    private fun saveCustom(hh: Float?, ss: Float?, vv: Float?) {
+        val e = prefs.edit().putBoolean("custom", true).putBoolean("rainbow", false)
+        if (hh != null) e.putFloat("chue", hh)
+        if (ss != null) e.putFloat("csat", ss)
+        if (vv != null) e.putFloat("cval", vv)
+        e.apply()
+        stopAnim(); ripples.clear()
+        applyThemeLive()
+    }
+
+    private fun toggleRainbow() {
+        val on = !rainbowOn()
+        prefs.edit().putBoolean("rainbow", on).apply()
+        ripples.clear()
+        if (on) fadeStart = SystemClock.uptimeMillis()
+        render()
+    }
+
+    private fun colorPanel(h: Int) {
+        val rb = rainbowOn()
+        root.addView(header(h, "🎨 ألوان الكيبورد", { mode = letterMode; render() },
+            key(if (rb) "🌈 مفعّل" else "🌈 Rainbow", 2.4f, if (rb) 3 else 1) { toggleRainbow() }))
+        val size = h * 3
+        val h0 = prefs.getFloat("chue", 210f)
+        val s0 = prefs.getFloat("csat", 0.6f)
+        val v0 = prefs.getFloat("cval", 0.8f)
+        val bar = ValueBarView(this).apply {
+            baseHue = h0; baseSat = s0; value = v0
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
+                setMargins(dp(3), dp(8), dp(3), dp(8))
+            }
+            onPick = { vv -> saveCustom(null, null, vv) }
+            onDone = { render() }
+        }
+        val wheel = ColorWheelView(this).apply {
+            hue = h0; sat = s0
+            layoutParams = LinearLayout.LayoutParams(size, size).apply { setMargins(dp(4), 0, dp(8), 0) }
+            onPick = { hh, ss -> bar.baseHue = hh; bar.baseSat = ss; bar.invalidate(); saveCustom(hh, ss, null) }
+            onDone = { render() }
+        }
+        val ripple = prefs.getBoolean("ripple", true)
+        val names = listOf("بطيئة", "متوسطة", "سريعة")
+        val spd = prefs.getInt("rbspeed", 1).coerceIn(0, 2)
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, size, 1f)
+            addView(row(h, listOf<View>(bar)))
+            addView(row(h, listOf(key(if (ripple) "💥 توهج اللمس ✓" else "💥 توهج اللمس", 1f, if (ripple) 3 else 1) {
+                prefs.edit().putBoolean("ripple", !ripple).apply(); render()
+            })))
+            addView(row(h, listOf(key("⚡ سرعة الألوان: ${names[spd]}", 1f, 1) {
+                prefs.edit().putInt("rbspeed", (spd + 1) % 3).apply(); render()
+            })))
+        }
+        root.addView(row(size, listOf<View>(wheel, right)))
+        root.addView(panelBottom(h))
+    }
 }

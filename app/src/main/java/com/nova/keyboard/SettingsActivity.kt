@@ -45,7 +45,7 @@ class SettingsActivity : Activity() {
             }
         }.also { l.addView(it) }
 
-        l.addView(TextView(this).apply { text = "Nova Keyboard 4.1"; textSize = 26f; setTextColor(Color.WHITE) })
+        l.addView(TextView(this).apply { text = "Nova Keyboard 5.0"; textSize = 26f; setTextColor(Color.WHITE) })
         l.addView(Button(this).apply {
             text = "1) تفعيل الكيبورد"
             setOnClickListener { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
@@ -92,7 +92,8 @@ class SettingsActivity : Activity() {
         title("نصائح")
         l.addView(TextView(this).apply {
             setTextColor(Color.parseColor("#CCCCCC"))
-            text = "• اسحب على المسافة يميناً ويساراً لتحريك المؤشر\n" +
+            text = "• اضغط مطولاً على 🎨 لعجلة الألوان وRainbow\n" +
+                "• اسحب على المسافة يميناً ويساراً لتحريك المؤشر\n" +
                 "• اسحب ⌫ لليسار لحذف كلمات، أو اضغط عليه مطولاً\n" +
                 "• اضغط مطولاً على أي حرف لبدائله (أ إ آ، é، ٢…)\n" +
                 "• اضغط مطولاً على الأرقام للرموز (! @ # …)\n" +
