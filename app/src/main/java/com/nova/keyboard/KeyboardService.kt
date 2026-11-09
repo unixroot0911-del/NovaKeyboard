@@ -83,7 +83,7 @@ class KeyboardService : InputMethodService() {
     private val handler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("nova", MODE_PRIVATE) }
     private val th: Th get() = when {
-        prefs.getBoolean("rainbow", false) -> rainbowTh
+        prefs.getBoolean("rainbow", false) -> rainbowThNow()
         prefs.getBoolean("custom", false) -> customTh()
         else -> themes[prefs.getInt("theme", 0).coerceIn(0, themes.size - 1)]
     }
@@ -446,7 +446,7 @@ class KeyboardService : InputMethodService() {
         tv.gravity = Gravity.CENTER
         tv.setTextColor(fgc)
         tv.includeFontPadding = false
-        tv.typeface = if (style != 0) Typeface.DEFAULT_BOLD else Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        tv.typeface = if (rainbowOn()) Typeface.create(Typeface.MONOSPACE, Typeface.BOLD) else if (style != 0) Typeface.DEFAULT_BOLD else Typeface.create("sans-serif-medium", Typeface.NORMAL)
         val px = if (sz > 0f) sz else if (label.codePointCount(0, label.length) > 2) curH * 0.27f else curH * 0.40f
         tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, px)
         tv.background = rounded(bgc, style == 3)
@@ -1124,7 +1124,7 @@ class KeyboardService : InputMethodService() {
         var nx = 0f
         var ny = 0f
     }
-    private class Rp(val x: Float, val y: Float, val hue: Float, val t0: Long)
+    private class Rp(val x: Float, val y: Float, val color: Int, val t0: Long)
 
     private val rkeys = mutableListOf<RKey>()
     private val ripples = mutableListOf<Rp>()
@@ -1132,7 +1132,34 @@ class KeyboardService : InputMethodService() {
     private var animating = false
     private val rbStart = SystemClock.uptimeMillis()
     private var fadeStart = 0L
-    private val rainbowTh by lazy { Th(col(0xFF0E0E10), col(0xFFE9EAF0), col(0xFFC3C6D2), col(0xFF101012), col(0xFFFFFFFF)) }
+    private class Pal(val name: String, val bg: Int, val key: Int, val sp: Int, val fg: Int, val colors: IntArray)
+
+    private val pals = listOf(
+        Pal("Dracula", col(0xFF282A36), col(0xFF343746), col(0xFF44475A), col(0xFFF8F8F2),
+            intArrayOf(col(0xFFFF79C6), col(0xFFBD93F9), col(0xFF8BE9FD), col(0xFF50FA7B), col(0xFFF1FA8C), col(0xFFFFB86C), col(0xFFFF5555))),
+        Pal("Tokyo Night", col(0xFF1A1B26), col(0xFF24283B), col(0xFF363B58), col(0xFFC0CAF5),
+            intArrayOf(col(0xFFF7768E), col(0xFFFF9E64), col(0xFFE0AF68), col(0xFF9ECE6A), col(0xFF7DCFFF), col(0xFF7AA2F7), col(0xFFBB9AF7))),
+        Pal("One Dark", col(0xFF21252B), col(0xFF2C313A), col(0xFF3E4451), col(0xFFABB2BF),
+            intArrayOf(col(0xFFE06C75), col(0xFFD19A66), col(0xFFE5C07B), col(0xFF98C379), col(0xFF56B6C2), col(0xFF61AFEF), col(0xFFC678DD))),
+        Pal("Monokai", col(0xFF1E1F1C), col(0xFF2D2E27), col(0xFF3E3D32), col(0xFFF8F8F2),
+            intArrayOf(col(0xFFF92672), col(0xFFFD971F), col(0xFFE6DB74), col(0xFFA6E22E), col(0xFF66D9EF), col(0xFFAE81FF))),
+        Pal("Catppuccin", col(0xFF1E1E2E), col(0xFF313244), col(0xFF45475A), col(0xFFCDD6F4),
+            intArrayOf(col(0xFFF38BA8), col(0xFFFAB387), col(0xFFF9E2AF), col(0xFFA6E3A1), col(0xFF94E2D5), col(0xFF89B4FA), col(0xFFCBA6F7))),
+        Pal("Nord", col(0xFF2E3440), col(0xFF3B4252), col(0xFF4C566A), col(0xFFECEFF4),
+            intArrayOf(col(0xFFBF616A), col(0xFFD08770), col(0xFFEBCB8B), col(0xFFA3BE8C), col(0xFF88C0D0), col(0xFF81A1C1), col(0xFFB48EAD))),
+        Pal("Matrix", col(0xFF000000), col(0xFF08130B), col(0xFF10251A), col(0xFFB6FFC8),
+            intArrayOf(col(0xFF00FF41), col(0xFF39FF14), col(0xFF00CC66), col(0xFF7CFC00), col(0xFF00FF9C)))
+    )
+
+    private fun pal(): Pal = pals[prefs.getInt("rbpal", 0).coerceIn(0, pals.size - 1)]
+    private fun rainbowThNow(): Th { val p = pal(); return Th(p.bg, p.key, p.sp, p.fg) }
+
+    private fun paletteAt(c: IntArray, pos: Float): Int {
+        val x = ((pos % 1f) + 1f) % 1f * c.size
+        val i = x.toInt().coerceIn(0, c.size - 1)
+        return blend(c[i], c[(i + 1) % c.size], x - i)
+    }
+
     private val rbRun = object : Runnable {
         override fun run() {
             if (!animating) return
@@ -1178,7 +1205,7 @@ class KeyboardService : InputMethodService() {
             root.getLocationOnScreen(rl)
             val w = root.width.toFloat().coerceAtLeast(1f)
             ripples.add(Rp((loc[0] - rl[0] + v.width / 2f) / w, (loc[1] - rl[1] + v.height / 2f) / w,
-                (Math.random() * 360).toFloat(), SystemClock.uptimeMillis()))
+                pal().colors.let { it[(Math.random() * it.size).toInt().coerceAtMost(it.size - 1)] }, SystemClock.uptimeMillis()))
             if (ripples.size > 6) ripples.removeAt(0)
         } catch (e: Throwable) {}
     }
@@ -1194,18 +1221,22 @@ class KeyboardService : InputMethodService() {
         val rb = rainbowOn()
         if (!rb && ripples.isEmpty()) { stopAnim(); return }
         val t = th
+        val p = pal()
         val period = longArrayOf(14000L, 8000L, 4000L)[prefs.getInt("rbspeed", 1).coerceIn(0, 2)]
         val phase = ((now - rbStart) % period).toFloat() / period
         val fade = ((now - fadeStart) / 900f).coerceIn(0f, 1f)
-        val hsv = FloatArray(3)
         val black = 0xFF000000.toInt()
         for (k in rkeys) {
-            var c = baseColor(k.style, t)
+            val base = baseColor(k.style, t)
+            var face = base
+            var edge = blend(base, black, 0.45f)
+            var txt = t.fg
             if (rb) {
-                hsv[0] = (phase * 360f + k.nx * 220f + k.ny * 140f) % 360f
-                hsv[1] = when (k.style) { 0 -> 0.50f; 1 -> 0.62f; else -> 0.72f }
-                hsv[2] = when (k.style) { 0 -> 0.96f; 1 -> 0.84f; else -> 0.74f }
-                c = blend(c, Color.HSVToColor(hsv), fade)
+                val wc = paletteAt(p.colors, phase + k.nx * 0.55f + k.ny * 0.35f)
+                val kk = when (k.style) { 0 -> 0.16f; 1 -> 0.26f; else -> 0.36f } * fade
+                face = blend(base, wc, kk)
+                edge = blend(edge, wc, 0.85f * fade)
+                txt = blend(t.fg, wc, 0.9f * fade)
             }
             for (r in ripples) {
                 val age = (now - r.t0) / 1100f
@@ -1215,12 +1246,14 @@ class KeyboardService : InputMethodService() {
                 val dist = (1f - d / 0.85f).coerceIn(0f, 1f)
                 val amp = inner * Math.pow(dist.toDouble(), 1.3).toFloat() * Math.pow((1f - age).toDouble().coerceAtLeast(0.0), 1.5).toFloat()
                 if (amp > 0.01f) {
-                    hsv[0] = r.hue; hsv[1] = 0.72f; hsv[2] = 0.98f
-                    c = blend(c, Color.HSVToColor(hsv), amp * 0.95f)
+                    face = blend(face, r.color, amp * 0.92f)
+                    edge = blend(edge, r.color, amp)
+                    txt = blend(txt, t.bg, amp * 0.9f)
                 }
             }
-            k.face.setColor(c)
-            k.shadow.setColor(blend(c, black, 0.45f))
+            k.face.setColor(face)
+            k.shadow.setColor(edge)
+            k.v.setTextColor(txt)
         }
     }
 
@@ -1257,7 +1290,7 @@ class KeyboardService : InputMethodService() {
     private fun colorPanel(h: Int) {
         val rb = rainbowOn()
         root.addView(header(h, "🎨 ألوان الكيبورد", { mode = letterMode; render() },
-            key(if (rb) "🌈 مفعّل" else "🌈 Rainbow", 2.4f, if (rb) 3 else 1) { toggleRainbow() }))
+            key(if (rb) "💻 Dev ✓" else "💻 Dev Rainbow", 2.4f, if (rb) 3 else 1) { toggleRainbow() }))
         val size = h * 3
         val h0 = prefs.getFloat("chue", 210f)
         val s0 = prefs.getFloat("csat", 0.6f)
@@ -1279,15 +1312,20 @@ class KeyboardService : InputMethodService() {
         val ripple = prefs.getBoolean("ripple", true)
         val names = listOf("بطيئة", "متوسطة", "سريعة")
         val spd = prefs.getInt("rbspeed", 1).coerceIn(0, 2)
+        val pi = prefs.getInt("rbpal", 0).coerceIn(0, pals.size - 1)
         val right = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, size, 1f)
             addView(row(h, listOf<View>(bar)))
-            addView(row(h, listOf(key(if (ripple) "💥 توهج اللمس ✓" else "💥 توهج اللمس", 1f, if (ripple) 3 else 1) {
-                prefs.edit().putBoolean("ripple", !ripple).apply(); render()
-            })))
-            addView(row(h, listOf(key("⚡ سرعة الألوان: ${names[spd]}", 1f, 1) {
-                prefs.edit().putInt("rbspeed", (spd + 1) % 3).apply(); render()
+            addView(row(h, listOf(
+                key(if (ripple) "💥 توهج ✓" else "💥 توهج", 1f, if (ripple) 3 else 1) {
+                    prefs.edit().putBoolean("ripple", !ripple).apply(); render()
+                },
+                key("⚡ ${names[spd]}", 1f, 1) {
+                    prefs.edit().putInt("rbspeed", (spd + 1) % 3).apply(); render()
+                })))
+            addView(row(h, listOf(key("🧑‍💻 ${pals[pi].name}", 1f, 1) {
+                prefs.edit().putInt("rbpal", (pi + 1) % pals.size).apply(); render()
             })))
         }
         root.addView(row(size, listOf<View>(wheel, right)))
