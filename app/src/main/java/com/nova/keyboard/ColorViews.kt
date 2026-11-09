@@ -136,15 +136,24 @@ class KeyDrawable(
     private val radius: Float,
     private val inset: Float,
     private val strokeW: Float,
-    private val strokeColor: Int
+    private val strokeColor: Int,
+    private val glowW: Float
 ) : android.graphics.drawable.Drawable() {
     var face = 0
     var shadow = 0
+    var glow = 0f
+    var glowColor = 0
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val r = RectF()
 
     fun setColors(f: Int, s: Int) {
         if (f != face || s != shadow) { face = f; shadow = s; invalidateSelf() }
+    }
+
+    fun setGlow(g: Float, col: Int) {
+        if (kotlin.math.abs(g - glow) > 0.01f || (g > 0f && col != glowColor)) {
+            glow = g; glowColor = col; invalidateSelf()
+        }
     }
 
     override fun draw(c: Canvas) {
@@ -156,11 +165,27 @@ class KeyDrawable(
         r.bottom -= inset
         p.color = face
         c.drawRoundRect(r, radius, radius, p)
+        if (glow > 0.03f) {
+            val a = (glow * 150f).toInt().coerceIn(0, 255)
+            p.color = (glowColor and 0x00FFFFFF) or (a shl 24)
+            val ix = r.width() * 0.12f
+            val iy = r.height() * 0.16f
+            r.inset(ix, iy)
+            c.drawRoundRect(r, radius, radius, p)
+            r.inset(-ix, -iy)
+        }
         p.style = Paint.Style.STROKE
         p.strokeWidth = strokeW
         p.color = strokeColor
         r.inset(strokeW / 2f, strokeW / 2f)
         c.drawRoundRect(r, radius, radius, p)
+        if (glow > 0.05f) {
+            val a = (glow * 255f).toInt().coerceIn(0, 255)
+            p.strokeWidth = glowW
+            p.color = (glowColor and 0x00FFFFFF) or (a shl 24)
+            r.inset(glowW / 2f, glowW / 2f)
+            c.drawRoundRect(r, radius, radius, p)
+        }
     }
 
     override fun setAlpha(alpha: Int) {}

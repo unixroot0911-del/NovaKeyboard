@@ -39,6 +39,7 @@ import java.security.SecureRandom
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.sqrt
 
@@ -438,7 +439,8 @@ class KeyboardService : InputMethodService() {
         val kd = KeyDrawable(
             dp(8).toFloat(), dp(2).toFloat(),
             if (active) dp(2).toFloat() else 1f,
-            if (active) t.fg else ((t.fg and 0x00FFFFFF) or 0x33000000))
+            if (active) t.fg else ((t.fg and 0x00FFFFFF) or 0x33000000),
+            dp(3).toFloat())
         kd.setColors(c, blend(c, 0xFF000000.toInt(), 0.45f))
         return kd
     }
@@ -1239,7 +1241,7 @@ class KeyboardService : InputMethodService() {
             computePositions()
         }
         val now = SystemClock.uptimeMillis()
-        if (ripples.isNotEmpty()) ripples.removeAll { now - it.t0 > 1100L }
+        if (ripples.isNotEmpty()) ripples.removeAll { now - it.t0 > 1500L }
         val rb = rainbowOn()
         if (!rb && ripples.isEmpty()) { stopAnim(); return }
         val t = th
@@ -1256,25 +1258,33 @@ class KeyboardService : InputMethodService() {
             var face = base
             if (rb) {
                 val wc = paletteAt(cols, phase + k.nx * 0.9f + k.ny * 0.5f)
-                face = blend(base, wc, (if (k.style == 0) 0.62f else 0.48f) * fade)
+                face = blend(base, wc, (if (k.style == 0) 0.75f else 0.60f) * fade)
             }
+            var glow = 0f
+            var glowCol = 0
             if (hasRip) {
                 for (r in ripples) {
-                    val age = (now - r.t0) / 1100f
+                    val age = (now - r.t0) / 1500f
                     val dx = k.nx - r.x
                     val dy = k.ny - r.y
                     val d = sqrt(dx * dx + dy * dy)
-                    val inner = ((age * 1.25f - d + 0.12f) / 0.25f).coerceIn(0f, 1f)
-                    if (inner <= 0f) continue
-                    val dist = (1f - d / 0.85f).coerceIn(0f, 1f)
+                    val dist = (1f - d / 1.2f).coerceIn(0f, 1f)
                     if (dist <= 0f) continue
+                    val diff = d - age * 1.5f
+                    val ring = if (diff > -0.5f && diff < 0.5f) exp(-(diff * diff) / 0.0256f) else 0f
+                    val trail = if (diff <= 0f) (1f + diff / 0.5f).coerceIn(0f, 1f) else 0f
                     val u = (1f - age).coerceAtLeast(0f)
-                    val amp = inner * dist * sqrt(dist) * u * sqrt(u)
-                    if (amp > 0.01f) face = blend(face, r.color, amp)
+                    val amp = maxOf(ring * 0.95f, trail * 0.85f) * dist * sqrt(u)
+                    if (amp > 0.02f) {
+                        val lit = blend(r.color, white, 0.25f + 0.5f * amp)
+                        face = blend(face, lit, (amp * 1.2f).coerceAtMost(1f))
+                        if (amp > glow) { glow = amp; glowCol = lit }
+                    }
                 }
             }
             val lum = (0.299f * Color.red(face) + 0.587f * Color.green(face) + 0.114f * Color.blue(face)) / 255f
             k.kd.setColors(face, blend(face, black, 0.40f))
+            k.kd.setGlow(glow, glowCol)
             val code = if (lum > 0.55f) 1 else 2
             if (code != k.txtState) {
                 k.txtState = code
@@ -1290,6 +1300,7 @@ class KeyboardService : InputMethodService() {
         for (k in rkeys) {
             val c = baseColor(k.style, t)
             k.kd.setColors(c, blend(c, black, 0.45f))
+            k.kd.setGlow(0f, 0)
             k.txtState = 0
             k.v.setTextColor(t.fg)
         }
