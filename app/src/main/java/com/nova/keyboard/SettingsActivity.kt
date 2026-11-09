@@ -45,7 +45,7 @@ class SettingsActivity : Activity() {
             }
         }.also { l.addView(it) }
 
-        l.addView(TextView(this).apply { text = "Nova Keyboard 5.1"; textSize = 26f; setTextColor(Color.WHITE) })
+        l.addView(TextView(this).apply { text = "Nova Keyboard 5.2"; textSize = 26f; setTextColor(Color.WHITE) })
         l.addView(Button(this).apply {
             text = "1) تفعيل الكيبورد"
             setOnClickListener { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }

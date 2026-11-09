@@ -76,7 +76,7 @@ class ColorWheelView(ctx: Context) : View(ctx) {
                 invalidate()
                 onPick?.invoke(hue, sat)
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> onDone?.invoke()
+            MotionEvent.ACTION_UP -> onDone?.invoke()
         }
         return true
     }
@@ -125,7 +125,7 @@ class ValueBarView(ctx: Context) : View(ctx) {
                 invalidate()
                 onPick?.invoke(value)
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> onDone?.invoke()
+            MotionEvent.ACTION_UP -> onDone?.invoke()
         }
         return true
     }

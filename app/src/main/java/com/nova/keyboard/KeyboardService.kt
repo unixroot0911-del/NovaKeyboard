@@ -217,6 +217,16 @@ class KeyboardService : InputMethodService() {
 
     // ---------- rendering ----------
     private fun render() {
+        try {
+            renderInner()
+        } catch (e: Throwable) {
+            prefs.edit().putBoolean("rainbow", false).putBoolean("custom", false).apply()
+            mode = letterMode
+            try { renderInner() } catch (e2: Throwable) {}
+        }
+    }
+
+    private fun renderInner() {
         dismissPopup()
         dismissPreview()
         rkeys.clear(); posReady = false
@@ -1135,6 +1145,8 @@ class KeyboardService : InputMethodService() {
     private class Pal(val name: String, val bg: Int, val key: Int, val sp: Int, val fg: Int, val colors: IntArray)
 
     private val pals = listOf(
+        Pal("RGB Spectrum", col(0xFF0B0B0F), col(0xFF1C1C24), col(0xFF2A2A34), col(0xFFFFFFFF),
+            IntArray(18) { Color.HSVToColor(floatArrayOf(it * 20f, 0.9f, 1f)) }),
         Pal("Dracula", col(0xFF282A36), col(0xFF343746), col(0xFF44475A), col(0xFFF8F8F2),
             intArrayOf(col(0xFFFF79C6), col(0xFFBD93F9), col(0xFF8BE9FD), col(0xFF50FA7B), col(0xFFF1FA8C), col(0xFFFFB86C), col(0xFFFF5555))),
         Pal("Tokyo Night", col(0xFF1A1B26), col(0xFF24283B), col(0xFF363B58), col(0xFFC0CAF5),
@@ -1205,12 +1217,16 @@ class KeyboardService : InputMethodService() {
             root.getLocationOnScreen(rl)
             val w = root.width.toFloat().coerceAtLeast(1f)
             ripples.add(Rp((loc[0] - rl[0] + v.width / 2f) / w, (loc[1] - rl[1] + v.height / 2f) / w,
-                pal().colors.let { it[(Math.random() * it.size).toInt().coerceAtMost(it.size - 1)] }, SystemClock.uptimeMillis()))
+                blend(pal().colors.let { it[(Math.random() * it.size).toInt().coerceAtMost(it.size - 1)] }, 0xFFFFFFFF.toInt(), 0.15f), SystemClock.uptimeMillis()))
             if (ripples.size > 6) ripples.removeAt(0)
         } catch (e: Throwable) {}
     }
 
     private fun tick() {
+        try { tickInner() } catch (e: Throwable) { stopAnim() }
+    }
+
+    private fun tickInner() {
         if (!::root.isInitialized) return
         if (!posReady) {
             if (rkeys.isEmpty() || rkeys.any { it.v.width == 0 }) return
@@ -1226,17 +1242,14 @@ class KeyboardService : InputMethodService() {
         val phase = ((now - rbStart) % period).toFloat() / period
         val fade = ((now - fadeStart) / 900f).coerceIn(0f, 1f)
         val black = 0xFF000000.toInt()
+        val dark = 0xFF0B0B0F.toInt()
+        val white = 0xFFFFFFFF.toInt()
         for (k in rkeys) {
             val base = baseColor(k.style, t)
             var face = base
-            var edge = blend(base, black, 0.45f)
-            var txt = t.fg
             if (rb) {
-                val wc = paletteAt(p.colors, phase + k.nx * 0.55f + k.ny * 0.35f)
-                val kk = when (k.style) { 0 -> 0.16f; 1 -> 0.26f; else -> 0.36f } * fade
-                face = blend(base, wc, kk)
-                edge = blend(edge, wc, 0.85f * fade)
-                txt = blend(t.fg, wc, 0.9f * fade)
+                val wc = paletteAt(p.colors, phase + k.nx * 0.9f + k.ny * 0.5f)
+                face = blend(base, wc, (if (k.style == 0) 0.62f else 0.48f) * fade)
             }
             for (r in ripples) {
                 val age = (now - r.t0) / 1100f
@@ -1244,16 +1257,14 @@ class KeyboardService : InputMethodService() {
                 val front = age * 1.25f
                 val inner = ((front - d + 0.12f) / 0.25f).coerceIn(0f, 1f)
                 val dist = (1f - d / 0.85f).coerceIn(0f, 1f)
-                val amp = inner * Math.pow(dist.toDouble(), 1.3).toFloat() * Math.pow((1f - age).toDouble().coerceAtLeast(0.0), 1.5).toFloat()
-                if (amp > 0.01f) {
-                    face = blend(face, r.color, amp * 0.92f)
-                    edge = blend(edge, r.color, amp)
-                    txt = blend(txt, t.bg, amp * 0.9f)
-                }
+                val amp = inner * Math.pow(dist.toDouble(), 1.3).toFloat() *
+                    Math.pow((1f - age).toDouble().coerceAtLeast(0.0), 1.5).toFloat()
+                if (amp > 0.01f) face = blend(face, r.color, amp)
             }
+            val lum = (0.299f * Color.red(face) + 0.587f * Color.green(face) + 0.114f * Color.blue(face)) / 255f
             k.face.setColor(face)
-            k.shadow.setColor(edge)
-            k.v.setTextColor(txt)
+            k.shadow.setColor(blend(face, black, 0.40f))
+            k.v.setTextColor(if (lum > 0.55f) dark else white)
         }
     }
 
@@ -1276,7 +1287,7 @@ class KeyboardService : InputMethodService() {
         if (vv != null) e.putFloat("cval", vv)
         e.apply()
         stopAnim(); ripples.clear()
-        applyThemeLive()
+        try { applyThemeLive() } catch (e: Throwable) {}
     }
 
     private fun toggleRainbow() {
@@ -1290,7 +1301,7 @@ class KeyboardService : InputMethodService() {
     private fun colorPanel(h: Int) {
         val rb = rainbowOn()
         root.addView(header(h, "🎨 ألوان الكيبورد", { mode = letterMode; render() },
-            key(if (rb) "💻 Dev ✓" else "💻 Dev Rainbow", 2.4f, if (rb) 3 else 1) { toggleRainbow() }))
+            key(if (rb) "🌈 Rainbow ✓" else "🌈 Rainbow", 2.4f, if (rb) 3 else 1) { toggleRainbow() }))
         val size = h * 3
         val h0 = prefs.getFloat("chue", 210f)
         val s0 = prefs.getFloat("csat", 0.6f)
@@ -1301,13 +1312,13 @@ class KeyboardService : InputMethodService() {
                 setMargins(dp(3), dp(8), dp(3), dp(8))
             }
             onPick = { vv -> saveCustom(null, null, vv) }
-            onDone = { render() }
+            onDone = { handler.post { if (mode == Mode.COLOR) render() } }
         }
         val wheel = ColorWheelView(this).apply {
             hue = h0; sat = s0
             layoutParams = LinearLayout.LayoutParams(size, size).apply { setMargins(dp(4), 0, dp(8), 0) }
             onPick = { hh, ss -> bar.baseHue = hh; bar.baseSat = ss; bar.invalidate(); saveCustom(hh, ss, null) }
-            onDone = { render() }
+            onDone = { handler.post { if (mode == Mode.COLOR) render() } }
         }
         val ripple = prefs.getBoolean("ripple", true)
         val names = listOf("بطيئة", "متوسطة", "سريعة")
