@@ -40,6 +40,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.sqrt
 
 private fun blend(a: Int, b: Int, t: Float): Int {
     fun ch(sh: Int) = (((a shr sh) and 255) * (1 - t) + ((b shr sh) and 255) * t).toInt().coerceIn(0, 255)
@@ -433,13 +434,12 @@ class KeyboardService : InputMethodService() {
 
     private fun rounded(c: Int, active: Boolean = false): Drawable {
         val t = th
-        val r = dp(8).toFloat()
-        val shadow = GradientDrawable().apply { cornerRadius = r; setColor(blend(c, 0xFF000000.toInt(), 0.45f)) }
-        val face = GradientDrawable().apply {
-            cornerRadius = r; setColor(c)
-            if (active) setStroke(dp(2), t.fg) else setStroke(1, (t.fg and 0x00FFFFFF) or 0x33000000)
-        }
-        return LayerDrawable(arrayOf(shadow, face)).apply { setLayerInset(1, 0, 0, 0, dp(2)) }
+        val kd = KeyDrawable(
+            dp(8).toFloat(), dp(2).toFloat(),
+            if (active) dp(2).toFloat() else 1f,
+            if (active) t.fg else ((t.fg and 0x00FFFFFF) or 0x33000000))
+        kd.setColors(c, blend(c, 0xFF000000.toInt(), 0.45f))
+        return kd
     }
 
     private fun key(
@@ -461,8 +461,7 @@ class KeyboardService : InputMethodService() {
         tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, px)
         tv.background = rounded(bgc, style == 3)
         if (!onUp) {
-            val ld = tv.background as LayerDrawable
-            rkeys.add(RKey(tv, ld.getDrawable(1) as GradientDrawable, ld.getDrawable(0) as GradientDrawable, style))
+            rkeys.add(RKey(tv, tv.background as KeyDrawable, style))
         }
         val mx = maxOf(1, (dp(1) * 1.5f).toInt())
         tv.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, w).apply {
@@ -1005,7 +1004,7 @@ class KeyboardService : InputMethodService() {
     private var prevTv: TextView? = null
 
     private fun showPreview(anchor: View, label: String) {
-        if (!prefs.getBoolean("preview", true)) return
+        if (!prefs.getBoolean("preview", true) || rainbowOn()) return
         try {
             val t = th
             val w = (anchor.width * 1.5f).toInt()
@@ -1130,9 +1129,10 @@ class KeyboardService : InputMethodService() {
     )
 
     // ---------- colors / rainbow ----------
-    private class RKey(val v: TextView, val face: GradientDrawable, val shadow: GradientDrawable, val style: Int) {
+    private class RKey(val v: TextView, val kd: KeyDrawable, val style: Int) {
         var nx = 0f
         var ny = 0f
+        var txtState = 0
     }
     private class Rp(val x: Float, val y: Float, val color: Int, val t0: Long)
 
@@ -1141,6 +1141,7 @@ class KeyboardService : InputMethodService() {
     private var posReady = false
     private var animating = false
     private val rbStart = SystemClock.uptimeMillis()
+    private val periods = longArrayOf(14000L, 8000L, 4000L)
     private var fadeStart = 0L
     private class Pal(val name: String, val bg: Int, val key: Int, val sp: Int, val fg: Int, val colors: IntArray)
 
@@ -1176,7 +1177,7 @@ class KeyboardService : InputMethodService() {
         override fun run() {
             if (!animating) return
             tick()
-            handler.postDelayed(this, 33)
+            handler.postDelayed(this, if (ripples.isNotEmpty()) 33L else 50L)
         }
     }
 
@@ -1227,44 +1228,53 @@ class KeyboardService : InputMethodService() {
     }
 
     private fun tickInner() {
-        if (!::root.isInitialized) return
+        if (!::root.isInitialized || rkeys.isEmpty()) return
         if (!posReady) {
-            if (rkeys.isEmpty() || rkeys.any { it.v.width == 0 }) return
+            if (rkeys.any { it.v.width == 0 }) return
             computePositions()
         }
         val now = SystemClock.uptimeMillis()
-        ripples.removeAll { now - it.t0 > 1100L }
+        if (ripples.isNotEmpty()) ripples.removeAll { now - it.t0 > 1100L }
         val rb = rainbowOn()
         if (!rb && ripples.isEmpty()) { stopAnim(); return }
         val t = th
-        val p = pal()
-        val period = longArrayOf(14000L, 8000L, 4000L)[prefs.getInt("rbspeed", 1).coerceIn(0, 2)]
+        val cols = pal().colors
+        val period = periods[prefs.getInt("rbspeed", 1).coerceIn(0, 2)]
         val phase = ((now - rbStart) % period).toFloat() / period
         val fade = ((now - fadeStart) / 900f).coerceIn(0f, 1f)
         val black = 0xFF000000.toInt()
         val dark = 0xFF0B0B0F.toInt()
         val white = 0xFFFFFFFF.toInt()
+        val hasRip = ripples.isNotEmpty()
         for (k in rkeys) {
             val base = baseColor(k.style, t)
             var face = base
             if (rb) {
-                val wc = paletteAt(p.colors, phase + k.nx * 0.9f + k.ny * 0.5f)
+                val wc = paletteAt(cols, phase + k.nx * 0.9f + k.ny * 0.5f)
                 face = blend(base, wc, (if (k.style == 0) 0.62f else 0.48f) * fade)
             }
-            for (r in ripples) {
-                val age = (now - r.t0) / 1100f
-                val d = hypot(k.nx - r.x, k.ny - r.y)
-                val front = age * 1.25f
-                val inner = ((front - d + 0.12f) / 0.25f).coerceIn(0f, 1f)
-                val dist = (1f - d / 0.85f).coerceIn(0f, 1f)
-                val amp = inner * Math.pow(dist.toDouble(), 1.3).toFloat() *
-                    Math.pow((1f - age).toDouble().coerceAtLeast(0.0), 1.5).toFloat()
-                if (amp > 0.01f) face = blend(face, r.color, amp)
+            if (hasRip) {
+                for (r in ripples) {
+                    val age = (now - r.t0) / 1100f
+                    val dx = k.nx - r.x
+                    val dy = k.ny - r.y
+                    val d = sqrt(dx * dx + dy * dy)
+                    val inner = ((age * 1.25f - d + 0.12f) / 0.25f).coerceIn(0f, 1f)
+                    if (inner <= 0f) continue
+                    val dist = (1f - d / 0.85f).coerceIn(0f, 1f)
+                    if (dist <= 0f) continue
+                    val u = (1f - age).coerceAtLeast(0f)
+                    val amp = inner * dist * sqrt(dist) * u * sqrt(u)
+                    if (amp > 0.01f) face = blend(face, r.color, amp)
+                }
             }
             val lum = (0.299f * Color.red(face) + 0.587f * Color.green(face) + 0.114f * Color.blue(face)) / 255f
-            k.face.setColor(face)
-            k.shadow.setColor(blend(face, black, 0.40f))
-            k.v.setTextColor(if (lum > 0.55f) dark else white)
+            k.kd.setColors(face, blend(face, black, 0.40f))
+            val code = if (lum > 0.55f) 1 else 2
+            if (code != k.txtState) {
+                k.txtState = code
+                k.v.setTextColor(if (code == 1) dark else white)
+            }
         }
     }
 
@@ -1274,8 +1284,8 @@ class KeyboardService : InputMethodService() {
         val black = 0xFF000000.toInt()
         for (k in rkeys) {
             val c = baseColor(k.style, t)
-            k.face.setColor(c)
-            k.shadow.setColor(blend(c, black, 0.45f))
+            k.kd.setColors(c, blend(c, black, 0.45f))
+            k.txtState = 0
             k.v.setTextColor(t.fg)
         }
     }

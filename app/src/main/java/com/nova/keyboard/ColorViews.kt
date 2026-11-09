@@ -130,3 +130,41 @@ class ValueBarView(ctx: Context) : View(ctx) {
         return true
     }
 }
+
+/** Lightweight key background: no allocations when recolored (used by the rainbow animation). */
+class KeyDrawable(
+    private val radius: Float,
+    private val inset: Float,
+    private val strokeW: Float,
+    private val strokeColor: Int
+) : android.graphics.drawable.Drawable() {
+    var face = 0
+    var shadow = 0
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val r = RectF()
+
+    fun setColors(f: Int, s: Int) {
+        if (f != face || s != shadow) { face = f; shadow = s; invalidateSelf() }
+    }
+
+    override fun draw(c: Canvas) {
+        val b = bounds
+        r.set(b.left.toFloat(), b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat())
+        p.style = Paint.Style.FILL
+        p.color = shadow
+        c.drawRoundRect(r, radius, radius, p)
+        r.bottom -= inset
+        p.color = face
+        c.drawRoundRect(r, radius, radius, p)
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = strokeW
+        p.color = strokeColor
+        r.inset(strokeW / 2f, strokeW / 2f)
+        c.drawRoundRect(r, radius, radius, p)
+    }
+
+    override fun setAlpha(alpha: Int) {}
+    override fun setColorFilter(cf: android.graphics.ColorFilter?) {}
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+}
