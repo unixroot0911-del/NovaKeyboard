@@ -48,7 +48,7 @@ private fun blend(a: Int, b: Int, t: Float): Int {
 }
 
 class KeyboardService : InputMethodService() {
-    private enum class Mode { AR, EN, SYM, SYM2, EMO, CLIP, TOOLS, STYLE, DATE, SNIP, PHR, KAO, COLOR }
+    private enum class Mode { AR, EN, SYM, SYM2, EMO, CLIP, TOOLS, STYLE, DATE, SNIP, PHR, KAO, COLOR, RBEDIT }
     private class Th(val bg: Int, val key: Int, val sp: Int, val fg: Int, val tx: Int = fg) {
         val acc: Int = blend(sp, fg, 0.30f)
         val accFg: Int = fg
@@ -251,6 +251,7 @@ class KeyboardService : InputMethodService() {
                 Tools.styles.map { (label, f) -> label to { applyStyle(f) } })
             Mode.DATE -> choicePanel(h, "📅 التاريخ والوقت", dateItems().map { s -> s to { insertText(s) } })
             Mode.SNIP -> snipPanel(h)
+            Mode.RBEDIT -> rbEditPanel(h)
             Mode.COLOR -> colorPanel(h)
             Mode.PHR -> choicePanel(h, "🕌 عبارات ورموز", phraseItems().map { (l, x) -> l to { insertText(x) } })
             Mode.KAO -> choicePanel(h, "😜 كاموجي", kaoItems().map { x -> x to { insertText(x) } })
@@ -1161,10 +1162,14 @@ class KeyboardService : InputMethodService() {
         Pal("Nord", col(0xFF2E3440), col(0xFF3B4252), col(0xFF4C566A), col(0xFFECEFF4),
             intArrayOf(col(0xFFBF616A), col(0xFFD08770), col(0xFFEBCB8B), col(0xFFA3BE8C), col(0xFF88C0D0), col(0xFF81A1C1), col(0xFFB48EAD))),
         Pal("Matrix", col(0xFF000000), col(0xFF08130B), col(0xFF10251A), col(0xFFB6FFC8),
-            intArrayOf(col(0xFF00FF41), col(0xFF39FF14), col(0xFF00CC66), col(0xFF7CFC00), col(0xFF00FF9C)))
+            intArrayOf(col(0xFF00FF41), col(0xFF39FF14), col(0xFF00CC66), col(0xFF7CFC00), col(0xFF00FF9C))),
+        Pal("مخصص ✏", col(0xFF0B0B0F), col(0xFF1C1C24), col(0xFF2A2A34), col(0xFFFFFFFF), IntArray(0))
     )
 
-    private fun pal(): Pal = pals[prefs.getInt("rbpal", 0).coerceIn(0, pals.size - 1)]
+    private fun pal(): Pal {
+        val i = prefs.getInt("rbpal", 0).coerceIn(0, pals.size - 1)
+        return if (i == pals.size - 1) customPal() else pals[i]
+    }
     private fun rainbowThNow(): Th { val p = pal(); return Th(p.bg, p.key, p.sp, p.fg) }
 
     private fun paletteAt(c: IntArray, pos: Float): Int {
@@ -1345,9 +1350,141 @@ class KeyboardService : InputMethodService() {
                 key("⚡ ${names[spd]}", 1f, 1) {
                     prefs.edit().putInt("rbspeed", (spd + 1) % 3).apply(); render()
                 })))
-            addView(row(h, listOf(key("🧑‍💻 ${pals[pi].name}", 1f, 1) {
-                prefs.edit().putInt("rbpal", (pi + 1) % pals.size).apply(); render()
-            })))
+            addView(row(h, listOf(
+                key("🧑‍💻 ${pals[pi].name}", 1.7f, 1) {
+                    prefs.edit().putInt("rbpal", (pi + 1) % pals.size).apply(); render()
+                },
+                key("✏", 0.7f, 1) { openRbEdit() })))
+        }
+        root.addView(row(size, listOf<View>(wheel, right)))
+        root.addView(panelBottom(h))
+    }
+
+    // ---------- custom rainbow palette ----------
+    private var customPalCache: Pal? = null
+
+    private fun loadCustomCols(): IntArray {
+        val def = intArrayOf(col(0xFFFF3B30), col(0xFFFFCC00), col(0xFF34C759), col(0xFF0A84FF), col(0xFFBF5AF2))
+        val s = prefs.getString("rbcustom", null)
+        if (s.isNullOrBlank()) return def
+        return try {
+            val a = s.split(",").map { it.trim().toInt() }.toIntArray()
+            if (a.size >= 2) a else def
+        } catch (e: Exception) { def }
+    }
+
+    private fun customPal(): Pal {
+        customPalCache?.let { return it }
+        val b = pals.last()
+        val p = Pal(b.name, b.bg, b.key, b.sp, b.fg, loadCustomCols())
+        customPalCache = p
+        return p
+    }
+
+    private fun saveCustomCols(a: IntArray) {
+        prefs.edit().putString("rbcustom", a.joinToString(",")).apply()
+        customPalCache = null
+    }
+
+    private fun openRbEdit() {
+        val wasOn = rainbowOn()
+        prefs.edit().putInt("rbpal", pals.size - 1).putBoolean("rainbow", true).apply()
+        if (!wasOn) fadeStart = SystemClock.uptimeMillis()
+        ripples.clear()
+        mode = Mode.RBEDIT
+        render()
+    }
+
+    private fun addRbColor() {
+        val a = customPal().colors
+        if (a.size >= 8) { toast("الحد الأقصى 8 ألوان"); return }
+        val hsv = FloatArray(3)
+        Color.colorToHSV(a[prefs.getInt("rbsel", 0).coerceIn(0, a.size - 1)], hsv)
+        hsv[0] = (hsv[0] + 47f) % 360f
+        val n = a.copyOf(a.size + 1)
+        n[a.size] = Color.HSVToColor(hsv)
+        saveCustomCols(n)
+        prefs.edit().putInt("rbsel", n.size - 1).apply()
+        render()
+    }
+
+    private fun delRbColor() {
+        val a = customPal().colors
+        if (a.size <= 2) { toast("لازم لونان على الأقل"); return }
+        val sel = prefs.getInt("rbsel", 0).coerceIn(0, a.size - 1)
+        val n = a.filterIndexed { i, _ -> i != sel }.toIntArray()
+        saveCustomCols(n)
+        prefs.edit().putInt("rbsel", minOf(sel, n.size - 1)).apply()
+        render()
+    }
+
+    private fun updateRbColor(i: Int, c: Int, swView: View?) {
+        val a = customPal().colors.copyOf()
+        if (i !in a.indices) return
+        a[i] = c
+        saveCustomCols(a)
+        (swView?.background as? GradientDrawable)?.setColor(c)
+    }
+
+    private fun rbEditPanel(h: Int) {
+        val t = th
+        val cols = customPal().colors.copyOf()
+        val sel = prefs.getInt("rbsel", 0).coerceIn(0, cols.size - 1)
+        root.addView(row(h, listOf(
+            key("⬅", 1.2f, 1) { mode = Mode.COLOR; render() },
+            TextView(this).apply {
+                text = "🌈 ألواني (${cols.size}/8)"; setTextColor(t.tx); gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, curH * 0.30f)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2.4f)
+            },
+            key("➕", 1.1f, 1) { addRbColor() },
+            key("🗑", 1.1f, 1) { delRbColor() }
+        )))
+        val size = h * 3
+        val hsv = FloatArray(3)
+        Color.colorToHSV(cols[sel], hsv)
+        val bar = ValueBarView(this)
+        val wheel = ColorWheelView(this)
+        val sw = arrayOfNulls<View>(8)
+
+        fun swatch(i: Int): View {
+            if (i >= cols.size) return spacer(1f)
+            val v = View(this)
+            v.background = GradientDrawable().apply {
+                cornerRadius = dp(8).toFloat(); setColor(cols[i])
+                if (i == sel) setStroke(dp(3), t.tx) else setStroke(dp(1), Color.argb(90, 255, 255, 255))
+            }
+            v.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
+                setMargins(dp(3), dp(6), dp(3), dp(6))
+            }
+            v.setOnClickListener { prefs.edit().putInt("rbsel", i).apply(); render() }
+            sw[i] = v
+            return v
+        }
+
+        bar.apply {
+            baseHue = hsv[0]; baseSat = hsv[1]; value = hsv[2].coerceIn(0.2f, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
+                setMargins(dp(3), dp(8), dp(3), dp(8))
+            }
+        }
+        wheel.apply {
+            hue = hsv[0]; sat = hsv[1]
+            layoutParams = LinearLayout.LayoutParams(size, size).apply { setMargins(dp(4), 0, dp(8), 0) }
+        }
+        wheel.onPick = { hh, ss ->
+            bar.baseHue = hh; bar.baseSat = ss; bar.invalidate()
+            updateRbColor(sel, Color.HSVToColor(floatArrayOf(hh, ss, bar.value)), sw[sel])
+        }
+        bar.onPick = { vv ->
+            updateRbColor(sel, Color.HSVToColor(floatArrayOf(wheel.hue, wheel.sat, vv)), sw[sel])
+        }
+        val right = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, size, 1f)
+            addView(row(h, (0..3).map { swatch(it) }))
+            addView(row(h, (4..7).map { swatch(it) }))
+            addView(row(h, listOf<View>(bar)))
         }
         root.addView(row(size, listOf<View>(wheel, right)))
         root.addView(panelBottom(h))
